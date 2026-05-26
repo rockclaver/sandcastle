@@ -916,11 +916,28 @@ describe("opencode factory", () => {
     expect(stdin).toBeUndefined();
   });
 
-  it("buildPrintCommand does not include --format json", () => {
+  it("buildPrintCommand includes --format json so the parser receives JSON events", () => {
     const provider = opencode("opencode/big-pickle");
     const { command } = provider.buildPrintCommand(opts("do something"));
-    expect(command).not.toContain("--format json");
-    expect(command).not.toContain("--format");
+    expect(command).toContain("--format json");
+  });
+
+  it("buildPrintCommand includes --dangerously-skip-permissions when requested", () => {
+    const provider = opencode("opencode/big-pickle");
+    const { command } = provider.buildPrintCommand({
+      prompt: "do something",
+      dangerouslySkipPermissions: true,
+    });
+    expect(command).toContain("--dangerously-skip-permissions");
+  });
+
+  it("buildPrintCommand omits --dangerously-skip-permissions when not requested", () => {
+    const provider = opencode("opencode/big-pickle");
+    const { command } = provider.buildPrintCommand({
+      prompt: "do something",
+      dangerouslySkipPermissions: false,
+    });
+    expect(command).not.toContain("--dangerously-skip-permissions");
   });
 
   it("buildPrintCommand shell-escapes the prompt", () => {
@@ -1050,7 +1067,7 @@ describe("opencode factory", () => {
     ]);
   });
 
-  it("parseStreamLine skips non-allowlisted tools (read)", () => {
+  it("parseStreamLine extracts tool call from tool_use (read → filePath)", () => {
     const provider = opencode("opencode/big-pickle");
     const line = JSON.stringify({
       type: "tool_use",
@@ -1061,10 +1078,44 @@ describe("opencode factory", () => {
         state: { status: "completed", input: { filePath: "/some/file" } },
       },
     });
-    expect(provider.parseStreamLine(line)).toEqual([]);
+    expect(provider.parseStreamLine(line)).toEqual([
+      { type: "tool_call", name: "read", args: "/some/file" },
+    ]);
   });
 
-  it("parseStreamLine skips tool_use with a missing arg field", () => {
+  it("parseStreamLine extracts tool call from tool_use (grep → pattern)", () => {
+    const provider = opencode("opencode/big-pickle");
+    const line = JSON.stringify({
+      type: "tool_use",
+      sessionID: "ses_abc",
+      part: {
+        type: "tool",
+        tool: "grep",
+        state: { status: "completed", input: { pattern: "TODO" } },
+      },
+    });
+    expect(provider.parseStreamLine(line)).toEqual([
+      { type: "tool_call", name: "grep", args: "TODO" },
+    ]);
+  });
+
+  it("parseStreamLine falls back to JSON.stringify(input) for unknown tools", () => {
+    const provider = opencode("opencode/big-pickle");
+    const line = JSON.stringify({
+      type: "tool_use",
+      sessionID: "ses_abc",
+      part: {
+        type: "tool",
+        tool: "mystery",
+        state: { status: "completed", input: { foo: "bar" } },
+      },
+    });
+    expect(provider.parseStreamLine(line)).toEqual([
+      { type: "tool_call", name: "mystery", args: '{"foo":"bar"}' },
+    ]);
+  });
+
+  it("parseStreamLine falls back to JSON.stringify(input) when the known arg field is absent", () => {
     const provider = opencode("opencode/big-pickle");
     const line = JSON.stringify({
       type: "tool_use",
@@ -1075,7 +1126,37 @@ describe("opencode factory", () => {
         state: { status: "completed", input: { description: "no command" } },
       },
     });
+    expect(provider.parseStreamLine(line)).toEqual([
+      { type: "tool_call", name: "bash", args: '{"description":"no command"}' },
+    ]);
+  });
+
+  it("parseStreamLine skips tool_use that has not completed", () => {
+    const provider = opencode("opencode/big-pickle");
+    const line = JSON.stringify({
+      type: "tool_use",
+      sessionID: "ses_abc",
+      part: {
+        type: "tool",
+        tool: "bash",
+        state: { status: "running", input: { command: "npm test" } },
+      },
+    });
     expect(provider.parseStreamLine(line)).toEqual([]);
+  });
+
+  it("parseStreamLine extracts error message from an error event", () => {
+    const provider = opencode("opencode/big-pickle");
+    const line = JSON.stringify({
+      type: "error",
+      error: {
+        name: "ProviderAuthError",
+        data: { message: "Invalid API key" },
+      },
+    });
+    expect(provider.parseStreamLine(line)).toEqual([
+      { type: "result", result: "Invalid API key" },
+    ]);
   });
 
   it("parseStreamLine skips step_finish events", () => {
