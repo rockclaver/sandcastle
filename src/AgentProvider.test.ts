@@ -1165,14 +1165,15 @@ describe("resumeSession on non-Claude providers", () => {
     expect(command).not.toContain("abc-123");
   });
 
-  it("cursor includes --resume in buildPrintCommand when resumeSession is set", () => {
+  it("cursor ignores resumeSession in buildPrintCommand", () => {
     const provider = cursor("claude-sonnet-4-6");
     const { command } = provider.buildPrintCommand({
       prompt: "test",
       dangerouslySkipPermissions: true,
       resumeSession: "abc-123",
     });
-    expect(command).toContain("--resume 'abc-123'");
+    expect(command).not.toContain("--resume");
+    expect(command).not.toContain("abc-123");
   });
 });
 

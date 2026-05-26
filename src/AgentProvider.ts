@@ -455,19 +455,18 @@ export const cursor = (
   env: options?.env ?? {},
   captureSessions: false,
 
+  // Cursor has no filesystem-backed session storage (captureSessions: false, no
+  // sessionStorage), so it is non-resumable per ADR 0012/0016. resumeSession is
+  // ignored here — like pi and opencode — rather than wired to --resume.
   buildPrintCommand({
     prompt,
     dangerouslySkipPermissions,
-    resumeSession,
   }: AgentCommandOptions): PrintCommand {
     assertCursorPrintPromptFitsArgv(prompt);
     const forceFlag = dangerouslySkipPermissions ? " --force" : "";
 
-    const resumeFlag = resumeSession
-      ? ` --resume ${shellEscape(resumeSession)}`
-      : "";
     return {
-      command: `agent --print --output-format stream-json --model ${shellEscape(model)} ${forceFlag}${resumeFlag} ${shellEscape(prompt)}`,
+      command: `agent --print --output-format stream-json --model ${shellEscape(model)} ${forceFlag} ${shellEscape(prompt)}`,
     };
   },
 

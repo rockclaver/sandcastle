@@ -744,8 +744,10 @@ describe("InitService scaffold", () => {
     expect(dockerfile).toContain("FROM node:22-bookworm");
     expect(dockerfile).toContain("cursor.com/install");
     expect(dockerfile).toContain('ENV PATH="/home/agent/.local/bin:$PATH"');
+    expect(dockerfile).toContain("ARG AGENT_UID=1000");
+    expect(dockerfile).toContain("ARG AGENT_GID=1000");
     expect(dockerfile).toMatch(
-      /USER agent[\s\S]*RUN curl https:\/\/cursor\.com\/install -fsS \| bash/,
+      /USER \$\{AGENT_UID\}:\$\{AGENT_GID\}[\s\S]*RUN curl https:\/\/cursor\.com\/install -fsS \| bash/,
     );
     expect(dockerfile).not.toContain("{{BACKLOG_MANAGER_TOOLS}}");
   });

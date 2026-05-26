@@ -168,12 +168,15 @@ RUN apt-get update && apt-get install -y \\
 
 {{BACKLOG_MANAGER_TOOLS}}
 
-# Rename the base image's "node" user (UID 1000) to "agent".
-# This keeps UID 1000 so that --userns=keep-id (Podman) and
-# --user 1000:1000 (Docker) map to the correct home directory owner.
-RUN usermod -d /home/agent -m -l agent node
+# Build-args for UID/GID alignment: sandcastle docker build-image
+# defaults these to the host user's UID/GID so image-built files
+# and bind-mounted files share an owner without runtime chown.
+ARG AGENT_UID=1000
+ARG AGENT_GID=1000
 
-USER agent
+# Rename the base image's "node" user to "agent" and align UID/GID.
+RUN groupmod -g $AGENT_GID node && usermod -u $AGENT_UID -g $AGENT_GID -d /home/agent -m -l agent node
+USER \${AGENT_UID}:\${AGENT_GID}
 
 # Install Cursor Agent CLI
 RUN curl https://cursor.com/install -fsS | bash
