@@ -154,6 +154,9 @@ const result = await run({
     env: { DOCKER_SPECIFIC: "value" },
     // Optional: attach container to Docker network(s) — string or string[]
     network: "my-network",
+    // Optional: add the container user to supplementary groups via --group-add.
+    // Accepts group names or numeric GIDs (e.g. for a bind-mounted Docker socket).
+    groups: ["docker", 999],
   }),
 
   // Host repo directory — replaces process.cwd() as the anchor for
@@ -525,7 +528,7 @@ Commands run **inside the sandbox** after `sandbox.onSandboxReady` hooks complet
 ```markdown
 # Open issues
 
-!`gh issue list --state open --label Sandcastle --json number,title,body,comments,labels --limit 20`
+!`gh issue list --state open --label Sandcastle --json number,title,body,comments,labels --limit 100`
 
 # Recent commits
 
@@ -676,6 +679,7 @@ Scaffolds the `.sandcastle/` config directory and builds the container image. Th
 | `--image-name` | No       | `sandcastle:<repo-dir-name>` | Docker image name                                                    |
 | `--agent`      | No       | Interactive prompt           | Agent to use (`claude-code`, `pi`, `codex`, `opencode`)              |
 | `--model`      | No       | Agent's default model        | Model to use (e.g. `claude-sonnet-4-6`). Defaults to agent's default |
+| `--sandbox`    | No       | Interactive prompt           | Sandbox provider to use (`docker`, `podman`)                         |
 | `--template`   | No       | Interactive prompt           | Template to scaffold (e.g. `blank`, `simple-loop`)                   |
 
 Creates the following files:
