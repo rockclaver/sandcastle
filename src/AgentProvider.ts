@@ -4,12 +4,18 @@ import { tmpdir } from "node:os";
 import {
   claudeHostSessionPath,
   claudeSandboxSessionPath,
+  encodePiSessionDir,
   findClaudeSessionOnHost,
   findCodexSessionOnHost,
+  findPiSessionOnHost,
   locateCodexHostSession,
   locateCodexSandboxSession,
+  locatePiHostSession,
+  locatePiSandboxSession,
+  piSessionDirPath,
   transferClaudeSession,
   transferCodexSession,
+  transferPiSession,
   type HostSessionLookup,
 } from "./SessionStore.js";
 import type { BindMountSandboxHandle } from "./SandboxProvider.js";
@@ -420,10 +426,68 @@ const makeCodexSessionStorage = (
 // Pi agent provider
 // ---------------------------------------------------------------------------
 
+const makePiSessionStorage = (options?: PiOptions): AgentSessionStorage => {
+  const hostSessionsDir = options?.sessionStorage?.hostSessionsDir;
+  const sandboxSessionsDir =
+    options?.sessionStorage?.sandboxSessionsDir ??
+    posix.join("/home/agent", ".pi", "agent", "sessions");
+
+  return {
+    hostSessionFilePath: (cwd, _id) => piSessionDirPath(cwd, hostSessionsDir),
+    existsOnHost: async (_cwd, id) => {
+      const found = await findPiSessionOnHost(id, hostSessionsDir);
+      return found.path !== undefined;
+    },
+    readHostSession: async (_cwd, id) => {
+      const found = await findPiSessionOnHost(id, hostSessionsDir);
+      if (!found.path) return undefined;
+      return readFile(found.path, "utf-8");
+    },
+    captureToHost: async ({ hostCwd, sandboxCwd, sessionId, handle }) => {
+      const located = await locatePiSandboxSession(
+        sessionId,
+        handle,
+        sandboxSessionsDir,
+      );
+      const jsonl = await readSandboxFile(handle, located.path, "pi-cap");
+      const rewritten = transferPiSession(jsonl, sandboxCwd, hostCwd);
+      // Pi resolves `--session <id>` against the *current project's* encoded
+      // directory first; a transferred file in any other directory hits the
+      // "fork session?" prompt, which hangs in print/json mode. So we land
+      // the file in `--<enc-host-cwd>--/<filename>`, not the sandbox's
+      // encoded dir.
+      const filename = posix.basename(located.path);
+      const target = join(piSessionDirPath(hostCwd, hostSessionsDir), filename);
+      await mkdir(dirname(target), { recursive: true });
+      await writeFile(target, rewritten);
+    },
+    resumeIntoSandbox: async ({ hostCwd, sandboxCwd, sessionId, handle }) => {
+      const located = await locatePiHostSession(sessionId, hostSessionsDir);
+      const jsonl = await readFile(located.path, "utf-8");
+      const rewritten = transferPiSession(jsonl, hostCwd, sandboxCwd);
+      const filename = located.relativePath.split(/[\\/]/).pop()!;
+      const target = posix.join(
+        sandboxSessionsDir,
+        encodePiSessionDir(sandboxCwd),
+        filename,
+      );
+      await writeSandboxFile(handle, target, rewritten, "pi-res");
+    },
+    findByIdOnHost: (id) => findPiSessionOnHost(id, hostSessionsDir),
+  };
+};
+
 const parsePiStreamLine = (line: string): ParsedStreamEvent[] => {
   if (!line.startsWith("{")) return [];
   try {
     const obj = JSON.parse(line);
+    // The first line of pi's --mode json stdout stream is a `session` header
+    // carrying the UUID; subsequent stream entries (model_change,
+    // thinking_level_change, message, ...) do not. Verified against
+    // @mariozechner/pi-coding-agent 0.73.1.
+    if (obj.type === "session" && typeof obj.id === "string") {
+      return [{ type: "session_id", sessionId: obj.id }];
+    }
     if (obj.type === "message_update" && obj.assistantMessageEvent) {
       const evt = obj.assistantMessageEvent as {
         type: string;
@@ -486,19 +550,39 @@ export interface PiOptions {
   readonly thinking?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
   /** Environment variables injected by this agent provider. */
   readonly env?: Record<string, string>;
+  /** When false, session capture is disabled. Default: true. */
+  readonly captureSessions?: boolean;
+  /** Override pi session directories for tests or non-standard installs. */
+  readonly sessionStorage?: {
+    readonly hostSessionsDir?: string;
+    readonly sandboxSessionsDir?: string;
+  };
 }
 
-export const pi = (model: string, options?: PiOptions): AgentProvider => ({
+export const pi = (
+  model: string,
+  options?: PiOptions,
+): AgentProvider & { readonly sessionStorage: AgentSessionStorage } => ({
   name: "pi",
   env: options?.env ?? {},
-  captureSessions: false,
+  captureSessions: options?.captureSessions ?? true,
+  sessionStorage: makePiSessionStorage(options),
 
-  buildPrintCommand({ prompt }: AgentCommandOptions): PrintCommand {
+  buildPrintCommand({
+    prompt,
+    resumeSession,
+  }: AgentCommandOptions): PrintCommand {
     const thinkingFlag = options?.thinking
       ? ` --thinking ${options.thinking}`
       : "";
+    // Pi persists print-mode sessions by default; `--session <id>` resolves an
+    // existing session and appends to it in place. Drop the legacy
+    // `--no-session` flag so fresh runs also persist and can be resumed later.
+    const sessionFlag = resumeSession
+      ? ` --session ${shellEscape(resumeSession)}`
+      : "";
     return {
-      command: `pi -p --mode json --no-session --model ${shellEscape(model)}${thinkingFlag}`,
+      command: `pi -p --mode json --model ${shellEscape(model)}${thinkingFlag}${sessionFlag}`,
       stdin: prompt,
     };
   },

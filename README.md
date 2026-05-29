@@ -821,9 +821,9 @@ const first = await run({
 const second = await first.resume?.("Now implement the plan");
 ```
 
-`resume` is present only on results from resumable providers (Claude Code, Codex) — hence the optional-chaining call.
+`resume` is present only on results from resumable providers (Claude Code, Codex, Pi) — hence the optional-chaining call.
 
-Before the sandbox starts, Sandcastle validates that the session file exists on the host and transfers it into the sandbox with `cwd` fields rewritten to match the sandbox-side path. Claude Code receives `--resume <id>`; Codex receives `codex exec resume <id>` with the prompt piped over stdin.
+Before the sandbox starts, Sandcastle validates that the session file exists on the host and transfers it into the sandbox with `cwd` fields rewritten to match the sandbox-side path. Claude Code receives `--resume <id>`; Codex receives `codex exec resume <id>` with the prompt piped over stdin; Pi receives `--session <id>`.
 
 Constraints:
 
@@ -895,10 +895,11 @@ The `pi()` factory accepts an optional second argument for provider-specific opt
 agent: pi("claude-sonnet-4-6", { thinking: "high" });
 ```
 
-| Option     | Type                                                                     | Default | Description                                           |
-| ---------- | ------------------------------------------------------------------------ | ------- | ----------------------------------------------------- |
-| `thinking` | `"off"` \| `"minimal"` \| `"low"` \| `"medium"` \| `"high"` \| `"xhigh"` | —       | Pi reasoning effort level via the `--thinking` flag   |
-| `env`      | `Record<string, string>`                                                 | `{}`    | Environment variables injected by this agent provider |
+| Option            | Type                                                                     | Default | Description                                              |
+| ----------------- | ------------------------------------------------------------------------ | ------- | -------------------------------------------------------- |
+| `thinking`        | `"off"` \| `"minimal"` \| `"low"` \| `"medium"` \| `"high"` \| `"xhigh"` | —       | Pi reasoning effort level via the `--thinking` flag      |
+| `env`             | `Record<string, string>`                                                 | `{}`    | Environment variables injected by this agent provider    |
+| `captureSessions` | `boolean`                                                                | `true`  | Capture pi session JSONL to host for `pi --session <id>` |
 
 ### Provider `env`
 

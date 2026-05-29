@@ -299,8 +299,40 @@ describe("pi factory", () => {
     const { command } = provider.buildPrintCommand(opts("do something"));
     expect(command).toContain("claude-sonnet-4-6");
     expect(command).toContain("--mode json");
-    expect(command).toContain("--no-session");
     expect(command).toContain("-p");
+    // Pi persists print-mode sessions by default so resume works; --no-session
+    // is no longer emitted.
+    expect(command).not.toContain("--no-session");
+  });
+
+  it("buildPrintCommand omits --session when resumeSession is not set", () => {
+    const provider = pi("claude-sonnet-4-6");
+    const { command } = provider.buildPrintCommand(opts("do something"));
+    expect(command).not.toContain("--session");
+  });
+
+  it("buildPrintCommand appends --session when resumeSession is set", () => {
+    const provider = pi("claude-sonnet-4-6", { thinking: "high" });
+    const { command, stdin } = provider.buildPrintCommand({
+      prompt: "continue",
+      dangerouslySkipPermissions: true,
+      resumeSession: "abc-123",
+    });
+    expect(command).toContain("--session 'abc-123'");
+    expect(command).toContain("--mode json");
+    expect(command).toContain("--model 'claude-sonnet-4-6'");
+    expect(command).toContain("--thinking high");
+    expect(stdin).toBe("continue");
+  });
+
+  it("buildPrintCommand shell-escapes the resume session id", () => {
+    const provider = pi("claude-sonnet-4-6");
+    const { command } = provider.buildPrintCommand({
+      prompt: "go",
+      dangerouslySkipPermissions: true,
+      resumeSession: "it's a session",
+    });
+    expect(command).toContain("--session 'it'\\''s a session'");
   });
 
   it("buildPrintCommand delivers prompt via stdin, not argv", () => {
@@ -370,6 +402,23 @@ describe("pi factory", () => {
       {
         type: "result",
         result: "Final answer <promise>COMPLETE</promise>",
+      },
+    ]);
+  });
+
+  it("parseStreamLine extracts session id from session header line", () => {
+    const provider = pi("claude-sonnet-4-6");
+    const line = JSON.stringify({
+      type: "session",
+      version: 3,
+      id: "9ba1c695-2222-4444-8888-e7e847bf34dd",
+      timestamp: "2026-05-29T08:00:00Z",
+      cwd: "/sandbox/repo",
+    });
+    expect(provider.parseStreamLine(line)).toEqual([
+      {
+        type: "session_id",
+        sessionId: "9ba1c695-2222-4444-8888-e7e847bf34dd",
       },
     ]);
   });
@@ -1440,15 +1489,14 @@ describe("opencode factory", () => {
 });
 
 describe("resumeSession on non-Claude providers", () => {
-  it("pi ignores resumeSession in buildPrintCommand", () => {
+  it("pi uses resumeSession in buildPrintCommand via --session", () => {
     const provider = pi("claude-sonnet-4-6");
     const { command } = provider.buildPrintCommand({
       prompt: "test",
       dangerouslySkipPermissions: true,
       resumeSession: "abc-123",
     });
-    expect(command).not.toContain("--resume");
-    expect(command).not.toContain("abc-123");
+    expect(command).toContain("--session 'abc-123'");
   });
 
   it("codex uses resumeSession in buildPrintCommand", () => {
@@ -1941,8 +1989,14 @@ describe("captureSessions flag", () => {
     ).toBe(false);
   });
 
-  it("pi has captureSessions false", () => {
-    expect(pi("pi-model").captureSessions).toBe(false);
+  it("pi defaults captureSessions to true", () => {
+    expect(pi("pi-model").captureSessions).toBe(true);
+  });
+
+  it("pi allows opting out of captureSessions", () => {
+    expect(pi("pi-model", { captureSessions: false }).captureSessions).toBe(
+      false,
+    );
   });
 
   it("codex defaults captureSessions to true", () => {
@@ -2010,6 +2064,150 @@ describe("sessionStorage", () => {
       expect(path).toContain("abc-123.jsonl");
     } finally {
       await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("pi captureToHost transfers a session JSONL with header cwd rewritten and lands it in the host-cwd-encoded dir", async () => {
+    const hostDir = await mkdtemp(join(tmpdir(), "sandcastle-pi-hostpath-"));
+    const sandboxDir = await mkdtemp(join(tmpdir(), "sandcastle-pi-sbx-"));
+    try {
+      const id = "9ba1c695-2222-4444-8888-e7e847bf34dd";
+      const sandboxCwd = "/sandbox/repo";
+      const hostCwd = "/host/repo";
+      const filename = `2026-05-29T08-00-00_${id}.jsonl`;
+      const sandboxSessionDir = join(sandboxDir, "--sandbox-repo--");
+      await mkdir(sandboxSessionDir, { recursive: true });
+      const sandboxPath = join(sandboxSessionDir, filename);
+      const jsonl = [
+        JSON.stringify({
+          type: "session",
+          version: 3,
+          id,
+          timestamp: "2026-05-29T08:00:00Z",
+          cwd: sandboxCwd,
+        }),
+        JSON.stringify({
+          type: "message",
+          role: "assistant",
+          content: [{ type: "text", text: "hi" }],
+        }),
+      ].join("\n");
+      await writeFile(sandboxPath, jsonl);
+
+      const provider = pi("claude-sonnet-4-6", {
+        sessionStorage: {
+          hostSessionsDir: hostDir,
+          sandboxSessionsDir: sandboxDir,
+        },
+      });
+
+      await provider.sessionStorage!.captureToHost({
+        hostCwd,
+        sandboxCwd,
+        sessionId: id,
+        handle: fsBindMountHandle(),
+      });
+
+      // File lands in the host-cwd-encoded directory, preserving the filename
+      // so pi's `--session <id>` glob (`*_<id>.jsonl`) resolves it.
+      const expectedHostPath = join(hostDir, "--host-repo--", filename);
+      const content = await readFile(expectedHostPath, "utf-8");
+      const lines = content.split("\n");
+      const header = JSON.parse(lines[0]!);
+      expect(header.type).toBe("session");
+      expect(header.cwd).toBe(hostCwd);
+      // Non-header lines are preserved verbatim.
+      expect(lines[1]).toBe(
+        JSON.stringify({
+          type: "message",
+          role: "assistant",
+          content: [{ type: "text", text: "hi" }],
+        }),
+      );
+
+      // existsOnHost finds the captured session by globbing the dir.
+      expect(await provider.sessionStorage!.existsOnHost(hostCwd, id)).toBe(
+        true,
+      );
+    } finally {
+      await rm(hostDir, { recursive: true, force: true });
+      await rm(sandboxDir, { recursive: true, force: true });
+    }
+  });
+
+  it("pi resumeIntoSandbox transfers a host session into the sandbox-cwd-encoded dir with cwd rewritten", async () => {
+    const hostDir = await mkdtemp(join(tmpdir(), "sandcastle-pi-resume-host-"));
+    const sandboxDir = await mkdtemp(
+      join(tmpdir(), "sandcastle-pi-resume-sbx-"),
+    );
+    try {
+      const id = "9ba1c695-2222-4444-8888-e7e847bf34dd";
+      const hostCwd = "/host/repo";
+      const sandboxCwd = "/sandbox/repo";
+      const filename = `2026-05-29T08-00-00_${id}.jsonl`;
+      const hostSessionDir = join(hostDir, "--host-repo--");
+      await mkdir(hostSessionDir, { recursive: true });
+      const hostPath = join(hostSessionDir, filename);
+      const jsonl = JSON.stringify({
+        type: "session",
+        version: 3,
+        id,
+        timestamp: "2026-05-29T08:00:00Z",
+        cwd: hostCwd,
+      });
+      await writeFile(hostPath, jsonl);
+
+      const provider = pi("claude-sonnet-4-6", {
+        sessionStorage: {
+          hostSessionsDir: hostDir,
+          sandboxSessionsDir: sandboxDir,
+        },
+      });
+
+      await provider.sessionStorage!.resumeIntoSandbox({
+        hostCwd,
+        sandboxCwd,
+        sessionId: id,
+        handle: fsBindMountHandle(),
+      });
+
+      const expectedSandboxPath = posix.join(
+        sandboxDir,
+        "--sandbox-repo--",
+        filename,
+      );
+      const content = await readFile(expectedSandboxPath, "utf-8");
+      const header = JSON.parse(content);
+      expect(header.type).toBe("session");
+      expect(header.cwd).toBe(sandboxCwd);
+    } finally {
+      await rm(hostDir, { recursive: true, force: true });
+      await rm(sandboxDir, { recursive: true, force: true });
+    }
+  });
+
+  it("pi hostSessionFilePath returns the host-cwd-encoded directory", () => {
+    const provider = pi("claude-sonnet-4-6", {
+      sessionStorage: { hostSessionsDir: "/tmp/sessions" },
+    });
+    const path = provider.sessionStorage!.hostSessionFilePath(
+      "/some/cwd",
+      "abc-123",
+    );
+    expect(path).toBe("/tmp/sessions/--some-cwd--");
+  });
+
+  it("pi existsOnHost returns false when no matching session lives under the host root", async () => {
+    const hostDir = await mkdtemp(join(tmpdir(), "sandcastle-pi-miss-"));
+    try {
+      const provider = pi("claude-sonnet-4-6", {
+        sessionStorage: { hostSessionsDir: hostDir },
+      });
+      expect(
+        await provider.sessionStorage!.existsOnHost("/some/cwd", "missing-id"),
+      ).toBe(false);
+    } finally {
+      await rm(hostDir, { recursive: true, force: true });
     }
   });
 
