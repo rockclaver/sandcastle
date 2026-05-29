@@ -1,11 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
+  encodePiSessionDir,
   encodeProjectPath,
   findClaudeSessionOnHost,
   findCodexSessionOnHost,
+  findPiSessionOnHost,
   locateCodexHostSession,
+  locatePiHostSession,
+  piSessionDirPath,
   transferClaudeSession,
   transferCodexSession,
+  transferPiSession,
 } from "./SessionStore.js";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -255,6 +260,191 @@ describe("locateCodexHostSession", () => {
 
       expect(result.path).toBe(sessionPath);
       expect(result.relativePath).toBe(relativePath);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// encodePiSessionDir
+// ---------------------------------------------------------------------------
+
+describe("encodePiSessionDir", () => {
+  it("encodes an absolute POSIX path by stripping the leading slash and wrapping in --", () => {
+    expect(encodePiSessionDir("/home/user/repos/my-project")).toBe(
+      "--home-user-repos-my-project--",
+    );
+  });
+
+  it("encodes a relative path without a leading separator", () => {
+    expect(encodePiSessionDir("home/user")).toBe("--home-user--");
+  });
+
+  it("encodes a Windows path with backslashes and drive colon", () => {
+    // Pi maps each separator/colon to a single hyphen — so `:\\` becomes `--`,
+    // not a normalised single `-`. Matches pi 0.73.1's SessionManager exactly.
+    expect(encodePiSessionDir("C:\\repos\\my-app")).toBe("--C--repos-my-app--");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// piSessionDirPath
+// ---------------------------------------------------------------------------
+
+describe("piSessionDirPath", () => {
+  it("joins the sessions root with the encoded cwd directory", () => {
+    expect(piSessionDirPath("/host/repo", "/tmp/pi-sessions")).toBe(
+      join("/tmp/pi-sessions", "--host-repo--"),
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// transferPiSession — header-only cwd rewrite
+// ---------------------------------------------------------------------------
+
+describe("transferPiSession", () => {
+  it("rewrites the cwd field on the session header line only", () => {
+    const jsonl = [
+      JSON.stringify({
+        type: "session",
+        version: 3,
+        id: "abc",
+        timestamp: "2026-05-29T08:00:00Z",
+        cwd: "/sandbox/repo",
+      }),
+      JSON.stringify({
+        type: "message",
+        role: "assistant",
+        content: [{ type: "text", text: "hi" }],
+      }),
+    ].join("\n");
+
+    const out = transferPiSession(jsonl, "/sandbox/repo", "/host/repo");
+    const lines = out.split("\n");
+
+    expect(JSON.parse(lines[0]!).cwd).toBe("/host/repo");
+    // Non-header lines round-trip verbatim — no field renaming, no
+    // whitespace shuffling.
+    expect(lines[1]).toBe(
+      JSON.stringify({
+        type: "message",
+        role: "assistant",
+        content: [{ type: "text", text: "hi" }],
+      }),
+    );
+  });
+
+  it("leaves non-header `cwd` fields untouched", () => {
+    // Defensive: if a future pi schema starts embedding cwd on other entry
+    // types, this test catches the silent drift — transferPiSession is
+    // header-only by design (the JSONL shape verified on pi 0.73.1).
+    const jsonl = [
+      JSON.stringify({ type: "session", id: "abc", cwd: "/sandbox/repo" }),
+      JSON.stringify({ type: "message", cwd: "/sandbox/repo" }),
+    ].join("\n");
+
+    const out = transferPiSession(jsonl, "/sandbox/repo", "/host/repo");
+    const lines = out.split("\n");
+
+    expect(JSON.parse(lines[0]!).cwd).toBe("/host/repo");
+    expect(JSON.parse(lines[1]!).cwd).toBe("/sandbox/repo");
+  });
+
+  it("leaves the header untouched when its cwd does not match fromCwd", () => {
+    const jsonl = JSON.stringify({
+      type: "session",
+      id: "abc",
+      cwd: "/other/path",
+    });
+
+    expect(transferPiSession(jsonl, "/sandbox/repo", "/host/repo")).toBe(jsonl);
+  });
+
+  it("tolerates non-JSON lines by passing them through verbatim", () => {
+    const jsonl = [
+      "not json",
+      JSON.stringify({ type: "session", id: "abc" }),
+    ].join("\n");
+
+    expect(transferPiSession(jsonl, "/a", "/b")).toBe(jsonl);
+  });
+
+  it("handles empty JSONL", () => {
+    expect(transferPiSession("", "/a", "/b")).toBe("");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// findPiSessionOnHost & locatePiHostSession
+// ---------------------------------------------------------------------------
+
+describe("findPiSessionOnHost", () => {
+  it("finds a session by id under its --<enc-cwd>-- directory", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "sandcastle-find-pi-"));
+    try {
+      const id = "9ba1c695-2222-4444-8888-e7e847bf34dd";
+      const filename = `2026-05-29T08-00-00_${id}.jsonl`;
+      const sessionDir = join(dir, "--home-user-repos-foo--");
+      await mkdir(sessionDir, { recursive: true });
+      await writeFile(join(sessionDir, filename), "{}");
+
+      const result = await findPiSessionOnHost(id, dir);
+
+      expect(result.path).toBe(join(sessionDir, filename));
+      expect(result.searchedRoot).toBe(dir);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("returns undefined path and names the searched root when absent", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "sandcastle-find-pi-"));
+    try {
+      const result = await findPiSessionOnHost("missing", dir);
+      expect(result.path).toBeUndefined();
+      expect(result.searchedRoot).toBe(dir);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("returns undefined path when the sessions dir does not exist", async () => {
+    const result = await findPiSessionOnHost(
+      "nope",
+      join(tmpdir(), "sandcastle-pi-does-not-exist-xyz"),
+    );
+    expect(result.path).toBeUndefined();
+  });
+});
+
+describe("locatePiHostSession", () => {
+  it("returns absolute path and the --<enc-cwd>--/<filename> relative path", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "sandcastle-locate-pi-"));
+    try {
+      const id = "9ba1c695-2222-4444-8888-e7e847bf34dd";
+      const filename = `2026-05-29T08-00-00_${id}.jsonl`;
+      const encodedDir = "--home-user-repos-foo--";
+      const sessionPath = join(dir, encodedDir, filename);
+      await mkdir(join(sessionPath, ".."), { recursive: true });
+      await writeFile(sessionPath, "{}");
+
+      const result = await locatePiHostSession(id, dir);
+
+      expect(result.path).toBe(sessionPath);
+      expect(result.relativePath).toBe(join(encodedDir, filename));
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("throws naming the searched root when the session is missing", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "sandcastle-locate-pi-"));
+    try {
+      await expect(locatePiHostSession("missing", dir)).rejects.toThrow(
+        `session missing not found in ${dir}`,
+      );
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
