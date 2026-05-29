@@ -820,13 +820,13 @@ Removes the Podman image.
 
 ### Session capture
 
-After each resumable provider iteration, Sandcastle automatically captures the agent's session file from the sandbox to the host. Claude Code sessions are stored under `~/.claude/projects/<encoded-path>/<session-id>.jsonl`; Codex sessions are stored under `~/.codex/sessions/YYYY/MM/DD/rollout-*-<session-id>.jsonl`. Any provider-specific `cwd` fields are rewritten to match the host repo root, so the provider's native resume command works.
+After each resumable provider iteration, Sandcastle automatically captures the agent's session file from the sandbox to the host. Claude Code sessions are stored under `~/.claude/projects/<encoded-path>/<session-id>.jsonl`; Codex sessions are stored under `~/.codex/sessions/YYYY/MM/DD/rollout-*-<session-id>.jsonl`; Pi sessions are stored under `~/.pi/agent/sessions/--<encoded-cwd>--/<timestamp>_<session-id>.jsonl`. Any provider-specific `cwd` fields are rewritten to match the host repo root, so the provider's native resume command works.
 
-Session capture is enabled by default for `claudeCode()` and `codex()` and can be opted out via `captureSessions: false`. Providers without `sessionStorage` do not attempt capture. Capture failure fails the run.
+Session capture is enabled by default for `claudeCode()`, `codex()`, and `pi()` and can be opted out via `captureSessions: false`. Providers without `sessionStorage` do not attempt capture. Capture failure fails the run.
 
 ### Session resume
 
-Pass `resumeSession` to `run()` to continue a prior Claude Code or Codex conversation inside a new sandbox:
+Pass `resumeSession` to `run()` to continue a prior Claude Code, Codex, or Pi conversation inside a new sandbox:
 
 ```typescript
 const result = await run({
@@ -849,9 +849,9 @@ const first = await run({
 const second = await first.resume?.("Now implement the plan");
 ```
 
-`resume` is present only on results from resumable providers (Claude Code, Codex) — hence the optional-chaining call.
+`resume` is present only on results from resumable providers (Claude Code, Codex, Pi) — hence the optional-chaining call.
 
-Before the sandbox starts, Sandcastle validates that the session file exists on the host and transfers it into the sandbox with `cwd` fields rewritten to match the sandbox-side path. Claude Code receives `--resume <id>`; Codex receives `codex exec resume <id>` with the prompt piped over stdin.
+Before the sandbox starts, Sandcastle validates that the session file exists on the host and transfers it into the sandbox with `cwd` fields rewritten to match the sandbox-side path. Claude Code receives `--resume <id>`; Codex receives `codex exec resume <id>` with the prompt piped over stdin; Pi receives `--session <id>`.
 
 Constraints:
 
@@ -859,6 +859,33 @@ Constraints:
 - The provider's host session file must exist (throws before sandbox creation).
 - Only iteration 1 receives the resume flag; subsequent iterations (if any) start fresh.
 - Providers without resume support reject `resumeSession`.
+
+### Session fork
+
+`RunResult.fork(prompt, options?)` is the sibling of `.resume()`: it continues from the last captured session but leaves the parent session JSONL untouched and writes the child under a new session id. The mechanism is the agent's native fork flag — `claude --resume <id> --fork-session` for Claude Code, `codex exec fork <id>` for Codex.
+
+Fork enables fan-out workflows where a single parent run is the starting point for several independent children:
+
+```typescript
+const parent = await run({
+  agent: claudeCode("claude-opus-4-7"),
+  sandbox: docker(),
+  prompt: "Read the codebase and summarise the data model",
+});
+
+const [reviewA, reviewB] = await Promise.all([
+  parent.fork?.("Review the migration plan", {
+    branchStrategy: { type: "branch", branch: "review-a" },
+  }),
+  parent.fork?.("Audit the auth layer", {
+    branchStrategy: { type: "branch", branch: "review-b" },
+  }),
+]);
+```
+
+**Fork is session-only.** `--fork-session` and `codex exec fork` isolate the agent session JSONL — they do **not** isolate the branch, worktree, or sandbox. Safe concurrent fan-out (`Promise.all([r.fork(a), r.fork(b)])`) requires the caller to give each child a distinct `branch` via `branchStrategy: { type: "branch", branch: "..." }`. The default `head` and `merge-to-head` strategies are **not** safe for concurrent forks: `head` shares the host working directory across all children, and `merge-to-head` races `git merge` against the same HEAD. See [ADR 0018](docs/adr/0018-fork-is-session-only.md).
+
+`fork` is present only on results from providers with `sessionStorage` (Claude Code, Codex) — hence the optional-chaining call. The same single-iteration and session-file constraints as `.resume()` apply.
 
 ### `ClaudeCodeOptions`
 
@@ -887,6 +914,20 @@ agent: codex("gpt-5.4", { effort: "high" });
 | `effort`          | `"low"` \| `"medium"` \| `"high"` \| `"xhigh"` | —       | Codex reasoning effort level via `model_reasoning_effort` |
 | `env`             | `Record<string, string>`                       | `{}`    | Environment variables injected by this agent provider     |
 | `captureSessions` | `boolean`                                      | `true`  | Capture Codex rollout JSONL to host for resume            |
+
+### `PiOptions`
+
+The `pi()` factory accepts an optional second argument for provider-specific options:
+
+```typescript
+agent: pi("claude-sonnet-4-6", { thinking: "high" });
+```
+
+| Option            | Type                                                                     | Default | Description                                              |
+| ----------------- | ------------------------------------------------------------------------ | ------- | -------------------------------------------------------- |
+| `thinking`        | `"off"` \| `"minimal"` \| `"low"` \| `"medium"` \| `"high"` \| `"xhigh"` | —       | Pi reasoning effort level via the `--thinking` flag      |
+| `env`             | `Record<string, string>`                                                 | `{}`    | Environment variables injected by this agent provider    |
+| `captureSessions` | `boolean`                                                                | `true`  | Capture pi session JSONL to host for `pi --session <id>` |
 
 ### Provider `env`
 
@@ -1280,7 +1321,7 @@ hooks: {
 
 ```bash
 npm install
-npm run build    # Build with tsgo
+npm run build    # Bundle with tsup
 npm test         # Run tests with vitest
 npm run typecheck # Type-check
 ```

@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { claudeCode, codex, pi } from "./AgentProvider.js";
+import { claudeCode, codex, copilot, pi } from "./AgentProvider.js";
 import { assertResumeSessionExists } from "./resumePrecheck.js";
 
 const SESSION_ID = "9ba1c695-2222-4444-8888-e7e847bf34dd";
@@ -58,6 +58,89 @@ describe("assertResumeSessionExists", () => {
         }),
       ).rejects.toThrow(
         `resumeSession "missing-id" not found under ${projectsDir}`,
+      );
+    });
+  });
+
+  describe("no-sandbox (Pi)", () => {
+    it("resolves when the session file exists under a --enc-cwd-- directory", async () => {
+      const filename = `2026-05-29T08-00-00_${SESSION_ID}.jsonl`;
+      const sessionPath = join(projectsDir, "--some-encoded-cwd--", filename);
+      await mkdir(join(sessionPath, ".."), { recursive: true });
+      await writeFile(sessionPath, JSON.stringify({ type: "session" }));
+
+      const provider = pi("claude-sonnet-4-6", {
+        sessionStorage: { hostSessionsDir: projectsDir },
+      });
+
+      await expect(
+        assertResumeSessionExists({
+          provider,
+          sandboxTag: "none",
+          hostRepoDir: "/some/unrelated/host/repo",
+          resumeSession: SESSION_ID,
+        }),
+      ).resolves.toBeUndefined();
+    });
+
+    it("throws naming the searched root when no matching session exists", async () => {
+      const provider = pi("claude-sonnet-4-6", {
+        sessionStorage: { hostSessionsDir: projectsDir },
+      });
+
+      await expect(
+        assertResumeSessionExists({
+          provider,
+          sandboxTag: "none",
+          hostRepoDir: "/some/host/repo",
+          resumeSession: "missing-id",
+        }),
+      ).rejects.toThrow(
+        `resumeSession "missing-id" not found under ${projectsDir}`,
+      );
+    });
+  });
+
+  describe("sandboxed (Pi, bind-mount)", () => {
+    it("passes when a session file exists at the host-repo-dir encoded location", async () => {
+      const provider = pi("claude-sonnet-4-6", {
+        sessionStorage: { hostSessionsDir: projectsDir },
+      });
+      const hostRepoDir = "/some/host/repo";
+      const sessionDir = provider.sessionStorage.hostSessionFilePath(
+        hostRepoDir,
+        SESSION_ID,
+      )!;
+      await mkdir(sessionDir, { recursive: true });
+      await writeFile(
+        join(sessionDir, `2026-05-29T08-00-00_${SESSION_ID}.jsonl`),
+        "{}",
+      );
+
+      await expect(
+        assertResumeSessionExists({
+          provider,
+          sandboxTag: "bind-mount",
+          hostRepoDir,
+          resumeSession: SESSION_ID,
+        }),
+      ).resolves.toBeUndefined();
+    });
+
+    it("throws naming the expected session directory when no file is present", async () => {
+      const provider = pi("claude-sonnet-4-6", {
+        sessionStorage: { hostSessionsDir: projectsDir },
+      });
+
+      await expect(
+        assertResumeSessionExists({
+          provider,
+          sandboxTag: "bind-mount",
+          hostRepoDir: "/some/host/repo",
+          resumeSession: "abc-123",
+        }),
+      ).rejects.toThrow(
+        'resumeSession "abc-123" not found: expected session file at',
       );
     });
   });
@@ -133,11 +216,11 @@ describe("assertResumeSessionExists", () => {
   it("throws when the provider does not support resume (no sessionStorage)", async () => {
     await expect(
       assertResumeSessionExists({
-        provider: pi("claude-sonnet-4-6"),
+        provider: copilot("claude-sonnet-4.5"),
         sandboxTag: "none",
         hostRepoDir: "/some/host/repo",
         resumeSession: SESSION_ID,
       }),
-    ).rejects.toThrow("pi does not support resumeSession");
+    ).rejects.toThrow("copilot does not support resumeSession");
   });
 });

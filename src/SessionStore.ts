@@ -224,3 +224,142 @@ export const transferCodexSession = (
   fromCwd: string,
   toCwd: string,
 ): string => rewriteSessionCwd(jsonl, fromCwd, toCwd);
+
+// ---------------------------------------------------------------------------
+// Pi session paths and transfer
+// ---------------------------------------------------------------------------
+
+/**
+ * Encode a cwd into pi's `~/.pi/agent/sessions/<encoded>/` layout. Pi strips the
+ * leading separator and replaces path separators / drive colons with `-`, then
+ * wraps the result in `--` markers. Mirrors `@mariozechner/pi-agent-core`'s
+ * `SessionManager` directory encoding (verified against pi 0.73.1).
+ */
+export const encodePiSessionDir = (cwd: string): string => {
+  const stripped = cwd.replace(/^[/\\]/, "");
+  const replaced = stripped.replace(/[/\\:]/g, "-");
+  return `--${replaced}--`;
+};
+
+/** Absolute host path to the pi session directory for a given cwd. */
+export const piSessionDirPath = (cwd: string, sessionsDir?: string): string => {
+  const base =
+    sessionsDir ?? join(process.env.HOME ?? "~", ".pi", "agent", "sessions");
+  return join(base, encodePiSessionDir(cwd));
+};
+
+const isPiSessionFilename = (filename: string, id: string): boolean =>
+  filename.endsWith(`_${id}.jsonl`);
+
+const findPiSessionPath = async (
+  rootDir: string,
+  id: string,
+): Promise<{ path: string; relativePath: string } | undefined> => {
+  let entries;
+  try {
+    entries = await readdir(rootDir, { withFileTypes: true });
+  } catch {
+    return undefined;
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const dirAbs = join(rootDir, entry.name);
+    let files;
+    try {
+      files = await readdir(dirAbs);
+    } catch {
+      continue;
+    }
+    const match = files.find((name) => isPiSessionFilename(name, id));
+    if (match) {
+      return {
+        path: join(dirAbs, match),
+        relativePath: join(entry.name, match),
+      };
+    }
+  }
+  return undefined;
+};
+
+/**
+ * Locate a pi session JSONL on the host by its id, scanning each
+ * `--<encoded-cwd>--/` directory under `~/.pi/agent/sessions/`.
+ */
+export const findPiSessionOnHost = async (
+  id: string,
+  sessionsDir?: string,
+): Promise<HostSessionLookup> => {
+  const root =
+    sessionsDir ?? join(process.env.HOME ?? "~", ".pi", "agent", "sessions");
+  const found = await findPiSessionPath(root, id);
+  return { path: found?.path, searchedRoot: root };
+};
+
+/** Pi host session lookup that also returns the relative `--enc-cwd--/file` path. */
+export interface PiSessionLocation {
+  readonly path: string;
+  readonly relativePath: string;
+}
+
+export const locatePiHostSession = async (
+  id: string,
+  sessionsDir?: string,
+): Promise<PiSessionLocation> => {
+  const root =
+    sessionsDir ?? join(process.env.HOME ?? "~", ".pi", "agent", "sessions");
+  const found = await findPiSessionPath(root, id);
+  if (!found) throw new Error(`session ${id} not found in ${root}`);
+  return found;
+};
+
+export const locatePiSandboxSession = async (
+  id: string,
+  handle: Pick<BindMountSandboxHandle, "exec">,
+  sessionsDir: string,
+): Promise<PiSessionLocation> => {
+  const result = await handle.exec(
+    `find ${JSON.stringify(sessionsDir)} -type f -name ${JSON.stringify(`*_${id}.jsonl`)} -print -quit`,
+  );
+  const path = result.stdout.trim().split("\n")[0];
+  if (result.exitCode !== 0 || !path) {
+    throw new Error(`session ${id} not found in ${sessionsDir}`);
+  }
+  return { path, relativePath: posix.relative(sessionsDir, path) };
+};
+
+/**
+ * Rewrite a pi session JSONL string, replacing the `cwd` field on the header
+ * `session` entry (the only line in pi's JSONL that carries the working
+ * directory) when it matches `fromCwd`. Pure function — no file I/O.
+ *
+ * Pi loads sessions with `assertSessionCwdExists`; in print/json mode a missing
+ * cwd terminates the process. The header rewrite is therefore load-bearing for
+ * resume, not cosmetic.
+ */
+export const transferPiSession = (
+  jsonl: string,
+  fromCwd: string,
+  toCwd: string,
+): string => {
+  if (jsonl === "") return "";
+  return jsonl
+    .split("\n")
+    .map((line) => {
+      if (line === "") return line;
+      try {
+        const entry = JSON.parse(line) as Record<string, unknown>;
+        if (
+          entry.type === "session" &&
+          typeof entry.cwd === "string" &&
+          entry.cwd === fromCwd
+        ) {
+          entry.cwd = toCwd;
+          return JSON.stringify(entry);
+        }
+        return line;
+      } catch {
+        return line;
+      }
+    })
+    .join("\n");
+};
