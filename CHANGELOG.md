@@ -1,4 +1,20 @@
-# @ai-hero/sandcastle
+# @rockclaver/sandcastle
+
+## 0.8.0
+
+### Minor Changes
+
+- 2d80ad9: `init` now supports selecting multiple agents — interactively via multi-select, or non-interactively with a comma-separated `--agent claude-code,codex`. The first selection becomes the generated `agent({ default })`. Generated `Dockerfile`/`Containerfile` compose a shared base plus per-agent install snippets under a single `FROM`/`USER`, and `.env.example` aggregates and de-duplicates the agents' API-key blocks alongside documented `AGENT=`/`AGENT_MODEL=` lines.
+- dc058b2: Add `sandcastle init --profile` for comma-separated project profile selection, including interactive profile multi-select and non-interactive `js-ts` defaulting.
+- edb0572: Add repository signal detection during `sandcastle init` and warn when selected profiles appear to mismatch the target checkout.
+- c1527ac: Document runtime agent selection, multi-select init behavior, and the `agent()` terminology.
+- 0ee5955: Make scaffolded prompts and `main` setup profile-aware. Generated prompt files now reference the selected `.sandcastle/profiles/*.md` guidance and drop hard-coded npm verify commands, and the `main` setup hook uses the selected profile's setup command (e.g. `flutter pub get`, `go mod download`) when no JS/TS profile is selected.
+- d640f18: Add an internal language/stack profile registry (`js-ts`, `flutter`, `dart`, `go`) and route the default scaffold through the `js-ts` profile. `sandcastle init` now generates profile guidance markdown plus `profiles.json` metadata under `.sandcastle/profiles/`.
+- 2a260c8: Add the runtime `agent()` resolver for selecting an agent provider from `AGENT` and `AGENT_MODEL`.
+
+### Patch Changes
+
+- d3311a9: Document project profiles: README now has a dedicated Profiles section covering `sandcastle init --profile`, interactive multi-select, examples like `--profile flutter,go`, the generated `.sandcastle/profiles/` guidance files and how agents use them, and the explicit out-of-scope note that profiles never install or pin Flutter/Dart/Go SDKs. Adds a contributor guide (`docs/agents/adding-a-profile.md`) for adding an internal profile entry without duplicating workflow templates, plus a `Profile` glossary entry in `CONTEXT.md`.
 
 ## 0.7.0
 
