@@ -1,4 +1,4 @@
-import { run, claudeCode } from "@ai-hero/sandcastle";
+import { run, agent } from "@ai-hero/sandcastle";
 import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
 
 // Blank template: customize this to build your own orchestration.
@@ -6,7 +6,9 @@ import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
 // Or add to package.json scripts: "sandcastle": "npx tsx .sandcastle/main.mts"
 
 await run({
-  agent: claudeCode("claude-opus-4-7"),
+  // The agent provider is resolved at runtime by agent(): the AGENT env var
+  // (or this baked default) picks the provider, AGENT_MODEL picks the model.
+  agent: agent({ default: "claude-code" }),
   sandbox: docker(),
   promptFile: "./.sandcastle/prompt.md",
 });

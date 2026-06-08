@@ -266,28 +266,47 @@ const initCommand = Command.make(
           return confirmed === true;
         });
 
-      // Resolve agent: CLI flag > interactive select
+      // Resolve agents: CLI flag (comma-separated) > interactive multi-select.
+      // The first selected agent becomes the generated `agent({ default })`.
       const agents = listAgents();
-      let selectedAgent: AgentEntry;
+      let selectedAgents: AgentEntry[];
       if (agentFlag._tag === "Some") {
-        const entry = getAgent(agentFlag.value);
-        if (!entry) {
-          const names = agents.map((a) => a.name).join(", ");
+        const names = agentFlag.value
+          .split(",")
+          .map((n) => n.trim())
+          .filter((n) => n.length > 0);
+        if (names.length === 0) {
           yield* Effect.fail(
-            new InitError({
-              message: `Unknown agent "${agentFlag.value}". Available: ${names}`,
-            }),
+            new InitError({ message: "--agent must name at least one agent." }),
           );
         }
-        selectedAgent = entry!;
+        const resolved: AgentEntry[] = [];
+        for (const name of names) {
+          const entry = getAgent(name);
+          if (!entry) {
+            const available = agents.map((a) => a.name).join(", ");
+            yield* Effect.fail(
+              new InitError({
+                message: `Unknown agent "${name}". Available: ${available}`,
+              }),
+            );
+          }
+          resolved.push(entry!);
+        }
+        // De-duplicate while preserving order (first occurrence = default).
+        const seen = new Set<string>();
+        selectedAgents = resolved.filter((a) =>
+          seen.has(a.name) ? false : (seen.add(a.name), true),
+        );
       } else {
         if (!isInteractive) {
           yield* failIfNonInteractive("--agent");
         }
         const selected = yield* Effect.promise(() =>
-          clack.select({
-            message: "Select an agent:",
-            initialValue: "claude-code",
+          clack.multiselect({
+            message: "Select one or more agents (first is the default):",
+            initialValues: ["claude-code"],
+            required: true,
             options: agents.map((a) => ({
               value: a.name,
               label: a.label,
@@ -300,14 +319,16 @@ const initCommand = Command.make(
             new InitError({ message: "Agent selection cancelled." }),
           );
         }
-        selectedAgent = getAgent(selected as string)!;
+        selectedAgents = (selected as string[]).map((n) => getAgent(n)!);
       }
 
-      // Resolve model: CLI flag > agent default
-      const selectedModel =
-        modelFlag._tag === "Some"
-          ? modelFlag.value
-          : selectedAgent.defaultModel;
+      // The default agent (first selected) drives the next-steps setup command.
+      const defaultAgent = selectedAgents[0]!;
+
+      // Resolve optional model override: CLI flag pre-fills AGENT_MODEL in
+      // .env.example. Unset leaves AGENT_MODEL commented (per-agent default).
+      const modelOverride =
+        modelFlag._tag === "Some" ? modelFlag.value : undefined;
 
       // Resolve sandbox provider: CLI flag > interactive select (no default — user must choose)
       const sandboxProviders = listSandboxProviders();
@@ -420,8 +441,8 @@ const initCommand = Command.make(
       const scaffoldResult = yield* d.spinner(
         "Scaffolding .sandcastle/ config directory...",
         scaffold(cwd, {
-          agent: selectedAgent,
-          model: selectedModel,
+          agents: selectedAgents,
+          modelOverride,
           templateName: selectedTemplate,
           createLabel: shouldCreateLabel,
           issueTracker: selectedIssueTracker,
@@ -524,7 +545,7 @@ const initCommand = Command.make(
         selectedTemplate,
         scaffoldResult.mainFilename,
         selectedIssueTracker,
-        selectedAgent,
+        defaultAgent,
         packageManager,
       );
       for (const [i, line] of nextSteps.entries()) {
