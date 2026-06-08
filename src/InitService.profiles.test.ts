@@ -1,6 +1,6 @@
 import { NodeFileSystem } from "@effect/platform-node";
 import { Effect } from "effect";
-import { mkdtemp, readFile } from "node:fs/promises";
+import { access, mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -34,6 +34,20 @@ const readMetadata = async (repoDir: string) =>
       "utf-8",
     ),
   ) as { profiles: { name: string; label: string; guidance: string }[] };
+
+const guidanceExists = async (
+  repoDir: string,
+  profileName: string,
+): Promise<boolean> => {
+  try {
+    await access(join(repoDir, ".sandcastle", "profiles", `${profileName}.md`));
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const profilesFor = (...names: string[]) => names.map((n) => getProfile(n)!);
 
 // ---------------------------------------------------------------------------
 // AC: registry exposes js-ts, flutter, dart, go with stable names, labels,
@@ -137,5 +151,162 @@ describe("Profile scaffolding", () => {
 
     const metadata = await readMetadata(dir);
     expect(metadata.profiles.map((p) => p.name)).toEqual(["js-ts"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 3: Profile-Aware Template Output
+// ---------------------------------------------------------------------------
+
+describe("Profile-aware template output", () => {
+  // AC (issue #11): Generated prompt files reference the scaffolded profile
+  // guidance for selected profiles.
+  it("AC: default scaffold prompt references the js-ts profile guidance", async () => {
+    const dir = await makeDir();
+    await runScaffold(dir, { templateName: "simple-loop" });
+
+    const prompt = await readFile(
+      join(dir, ".sandcastle", "prompt.md"),
+      "utf-8",
+    );
+    expect(prompt).toContain("Project profiles");
+    expect(prompt).toContain(".sandcastle/profiles/js-ts.md");
+    // The hard-coded npm verify phrase is replaced by a guidance pointer.
+    expect(prompt).not.toContain("`npm run typecheck` and `npm run test`");
+    expect(prompt).toContain(".sandcastle/profiles/");
+  });
+
+  it("AC: go scaffold prompt references go guidance and not js-only verify commands", async () => {
+    const dir = await makeDir();
+    await runScaffold(dir, {
+      templateName: "simple-loop",
+      profiles: profilesFor("go"),
+    });
+
+    const prompt = await readFile(
+      join(dir, ".sandcastle", "prompt.md"),
+      "utf-8",
+    );
+    expect(prompt).toContain(".sandcastle/profiles/go.md");
+    expect(prompt).not.toContain("`npm run typecheck` and `npm run test`");
+  });
+
+  // AC (issue #11): Generated main setup defaults avoid hard-coded JS-only
+  // setup assumptions when non-JS profiles are selected.
+  it("AC: go-only scaffold main avoids npm-only setup hook", async () => {
+    const dir = await makeDir();
+    await runScaffold(dir, {
+      templateName: "simple-loop",
+      profiles: profilesFor("go"),
+    });
+
+    const main = await readFile(join(dir, ".sandcastle", "main.mts"), "utf-8");
+    expect(main).not.toContain("npm install");
+    expect(main).toContain("go mod download");
+  });
+
+  it("AC: js-ts scaffold main keeps the npm setup hook", async () => {
+    const dir = await makeDir();
+    await runScaffold(dir, { templateName: "simple-loop" });
+
+    const main = await readFile(join(dir, ".sandcastle", "main.mts"), "utf-8");
+    expect(main).toContain("npm install");
+  });
+
+  it("AC: flutter+go scaffold main uses the primary (first) profile setup command", async () => {
+    const dir = await makeDir();
+    await runScaffold(dir, {
+      templateName: "simple-loop",
+      profiles: profilesFor("flutter", "go"),
+    });
+
+    const main = await readFile(join(dir, ".sandcastle", "main.mts"), "utf-8");
+    expect(main).not.toContain("npm install");
+    expect(main).toContain("flutter pub get");
+  });
+
+  // AC (issue #11): Selecting `flutter` scaffolds Flutter-aware guidance and
+  // does not scaffold unrelated Go-only guidance.
+  it("AC: selecting flutter scaffolds flutter guidance and not go guidance", async () => {
+    const dir = await makeDir();
+    await runScaffold(dir, { profiles: profilesFor("flutter") });
+
+    expect(await guidanceExists(dir, "flutter")).toBe(true);
+    expect(await guidanceExists(dir, "go")).toBe(false);
+
+    const guidance = await readFile(
+      join(dir, ".sandcastle", "profiles", "flutter.md"),
+      "utf-8",
+    );
+    expect(guidance).toContain("flutter analyze");
+    expect(guidance).toContain("flutter pub get");
+  });
+
+  // AC (issue #11): Selecting `go` scaffolds Go-aware guidance and does not
+  // scaffold unrelated Flutter-only guidance.
+  it("AC: selecting go scaffolds go guidance and not flutter guidance", async () => {
+    const dir = await makeDir();
+    await runScaffold(dir, { profiles: profilesFor("go") });
+
+    expect(await guidanceExists(dir, "go")).toBe(true);
+    expect(await guidanceExists(dir, "flutter")).toBe(false);
+
+    const guidance = await readFile(
+      join(dir, ".sandcastle", "profiles", "go.md"),
+      "utf-8",
+    );
+    expect(guidance).toContain("go test ./...");
+    expect(guidance).toContain("go mod download");
+  });
+
+  // AC (issue #11): Selecting `flutter,go` scaffolds both profile guidance
+  // files and generated metadata lists both profiles.
+  it("AC: selecting flutter,go scaffolds both guidance files and metadata lists both", async () => {
+    const dir = await makeDir();
+    await runScaffold(dir, { profiles: profilesFor("flutter", "go") });
+
+    expect(await guidanceExists(dir, "flutter")).toBe(true);
+    expect(await guidanceExists(dir, "go")).toBe(true);
+
+    const metadata = await readMetadata(dir);
+    expect(metadata.profiles.map((p) => p.name)).toEqual(["flutter", "go"]);
+  });
+
+  // AC (issue #11): Planner and reviewer templates reference selected profile
+  // guidance consistently.
+  it("AC: planner + reviewer prompts all reference the selected profile guidance", async () => {
+    const dir = await makeDir();
+    await runScaffold(dir, {
+      templateName: "parallel-planner-with-review",
+      profiles: profilesFor("go"),
+    });
+
+    const promptFiles = [
+      "plan-prompt.md",
+      "implement-prompt.md",
+      "review-prompt.md",
+      "merge-prompt.md",
+    ];
+    for (const f of promptFiles) {
+      const content = await readFile(join(dir, ".sandcastle", f), "utf-8");
+      expect(content).toContain(".sandcastle/profiles/go.md");
+      expect(content).toContain("Project profiles");
+    }
+  });
+
+  // AC (issue #11): CODING_STANDARDS.md is not a prompt file and must not get a
+  // profiles section appended.
+  it("AC: non-prompt template files are not rewritten with a profiles section", async () => {
+    const dir = await makeDir();
+    await runScaffold(dir, {
+      templateName: "sequential-reviewer",
+      profiles: profilesFor("go"),
+    });
+
+    const standards = await readFile(
+      join(dir, ".sandcastle", "CODING_STANDARDS.md"),
+      "utf-8",
+    );
+    expect(standards).not.toContain("Project profiles");
   });
 });

@@ -597,6 +597,12 @@ export interface ProfileEntry {
   readonly label: string;
   /** Short prose describing the stack and how the agent should treat it. */
   readonly guidance: string;
+  /**
+   * Suggested setup commands (dependency fetch / bootstrap) for this stack.
+   * The first entry is baked as the generated `main` setup hook when no JS
+   * profile is selected, replacing the npm-only default.
+   */
+  readonly setupCommands: readonly string[];
   /** Suggested validation commands the agent should run for this stack. */
   readonly validationCommands: readonly string[];
 }
@@ -610,6 +616,7 @@ const PROFILE_REGISTRY: ProfileEntry[] = [
     label: "JavaScript / TypeScript",
     guidance:
       "JavaScript or TypeScript project managed with npm, pnpm, yarn, or bun. Install dependencies before validating, and prefer the project's existing scripts (typecheck, lint, test) over ad-hoc commands.",
+    setupCommands: ["npm install"],
     validationCommands: [
       "npm install",
       "npm run typecheck",
@@ -622,6 +629,7 @@ const PROFILE_REGISTRY: ProfileEntry[] = [
     label: "Flutter",
     guidance:
       "Flutter application using the Dart SDK. Fetch packages with `flutter pub get`, then analyze and test through the Flutter toolchain. Sandcastle does not install or pin the Flutter SDK — assume it is available in the sandbox.",
+    setupCommands: ["flutter pub get"],
     validationCommands: ["flutter pub get", "flutter analyze", "flutter test"],
   },
   {
@@ -629,6 +637,7 @@ const PROFILE_REGISTRY: ProfileEntry[] = [
     label: "Dart",
     guidance:
       "Standalone Dart package (no Flutter). Fetch packages with `dart pub get`, then analyze and test with the Dart toolchain. Sandcastle does not install or pin the Dart SDK — assume it is available in the sandbox.",
+    setupCommands: ["dart pub get"],
     validationCommands: ["dart pub get", "dart analyze", "dart test"],
   },
   {
@@ -636,6 +645,7 @@ const PROFILE_REGISTRY: ProfileEntry[] = [
     label: "Go",
     guidance:
       "Go module defined by `go.mod`. Build, vet, and test through the Go toolchain. Sandcastle does not install or pin the Go SDK — assume it is available in the sandbox.",
+    setupCommands: ["go mod download"],
     validationCommands: ["go build ./...", "go vet ./...", "go test ./..."],
   },
 ];
@@ -886,6 +896,94 @@ const rewritePromptFiles = (
     );
   });
 
+/** A scaffolded prompt file (vs. CODING_STANDARDS.md or generated guidance). */
+const isPromptFile = (filename: string): boolean =>
+  filename.endsWith("prompt.md");
+
+/**
+ * The "Project profiles" section appended to every generated prompt so the
+ * agent is pointed at the scaffolded per-profile guidance instead of assuming a
+ * single toolchain.
+ */
+const buildProfilesPromptSection = (
+  profiles: readonly ProfileEntry[],
+): string => {
+  const entries = profiles
+    .map((p) => `- ${p.label} — \`.sandcastle/${profileGuidancePath(p.name)}\``)
+    .join("\n");
+  return `# Project profiles
+
+This project was scaffolded for the profile(s) below. Read each guidance file and follow its setup and validation commands instead of assuming a specific toolchain:
+
+${entries}
+`;
+};
+
+/**
+ * Rewrite scaffolded prompt files and the main entrypoint so they reference the
+ * selected profile guidance rather than baking in npm-only assumptions:
+ *
+ * - Each prompt file gains a "Project profiles" section linking the generated
+ *   `.sandcastle/profiles/*.md` guidance, and its hard-coded npm verify phrase
+ *   is replaced with a pointer to that guidance.
+ * - When no JS/TS profile is selected, the npm-only `main` setup hook is
+ *   rewritten to the primary selected profile's setup command.
+ */
+const rewriteProfileReferences = (
+  configDir: string,
+  profiles: readonly ProfileEntry[],
+  mainFilename: string,
+): Effect.Effect<void, Error, FileSystem.FileSystem> =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const files = yield* fs
+      .readDirectory(configDir)
+      .pipe(Effect.mapError((e) => new Error(e.message)));
+
+    const promptSection = buildProfilesPromptSection(profiles);
+    const promptFiles = files.filter(isPromptFile);
+    yield* Effect.all(
+      promptFiles.map((f) =>
+        Effect.gen(function* () {
+          const filePath = join(configDir, f);
+          const content = yield* fs
+            .readFileString(filePath)
+            .pipe(Effect.mapError((e) => new Error(e.message)));
+          let updated = content.replace(
+            /`npm run typecheck` and `npm run test`/g,
+            "the validation commands listed in your project profile guidance under `.sandcastle/profiles/`",
+          );
+          updated = `${updated.trimEnd()}\n\n${promptSection}`;
+          yield* fs
+            .writeFileString(filePath, updated)
+            .pipe(Effect.mapError((e) => new Error(e.message)));
+        }),
+      ),
+      { concurrency: "unbounded" },
+    );
+
+    // Replace the npm-only setup hook in main when no JS/TS profile is selected.
+    const hasJsProfile = profiles.some((p) => p.name === DEFAULT_PROFILE_NAME);
+    if (!hasJsProfile) {
+      const setupCommand = profiles[0]?.setupCommands[0] ?? "npm install";
+      const mainPath = join(configDir, mainFilename);
+      const mainExists = yield* fs
+        .exists(mainPath)
+        .pipe(Effect.mapError((e) => new Error(e.message)));
+      if (mainExists) {
+        const mainContent = yield* fs
+          .readFileString(mainPath)
+          .pipe(Effect.mapError((e) => new Error(e.message)));
+        const rewritten = mainContent.replace(/npm install/g, setupCommand);
+        if (rewritten !== mainContent) {
+          yield* fs
+            .writeFileString(mainPath, rewritten)
+            .pipe(Effect.mapError((e) => new Error(e.message)));
+        }
+      }
+    }
+  });
+
 /** Text file extensions eligible for `{{KEY}}` template argument substitution. */
 const TEXT_FILE_EXTENSIONS = new Set([
   ".md",
@@ -1026,12 +1124,17 @@ const profileGuidancePath = (profileName: string): string =>
 
 /** Build the guidance markdown scaffolded for a single profile. */
 const buildProfileGuidanceDoc = (profile: ProfileEntry): string => {
+  const setup = profile.setupCommands.map((c) => `- \`${c}\``).join("\n");
   const commands = profile.validationCommands
     .map((c) => `- \`${c}\``)
     .join("\n");
   return `# ${profile.label} profile
 
 ${profile.guidance}
+
+## Suggested setup commands
+
+${setup}
 
 ## Suggested validation commands
 
@@ -1240,6 +1343,9 @@ export const scaffold = (
 
     // Generate profile guidance + metadata into .sandcastle/profiles/.
     yield* scaffoldProfiles(configDir, selectedProfiles);
+
+    // Point prompts + main setup at the selected profile guidance.
+    yield* rewriteProfileReferences(configDir, selectedProfiles, mainFilename);
 
     return { mainFilename };
   });
