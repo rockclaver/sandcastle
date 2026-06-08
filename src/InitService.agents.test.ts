@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { AGENT_DEFAULT_MODELS } from "./AgentProvider.js";
-import { listAgents, getAgent } from "./InitService.js";
+import {
+  listAgents,
+  getAgent,
+  composeAgentDockerfile,
+  composeAgentEnvExample,
+} from "./InitService.js";
 
 describe("Agent registry", () => {
   it("listAgents returns at least claude-code", () => {
@@ -14,7 +19,7 @@ describe("Agent registry", () => {
     expect(agent!.name).toBe("claude-code");
     expect(agent!.defaultModel).toBe("claude-opus-4-7");
     expect(agent!.factoryImport).toBe("claudeCode");
-    expect(agent!.dockerfileTemplate).toContain("FROM");
+    expect(composeAgentDockerfile([agent!.name])).toContain("FROM");
   });
 
   it("getAgent returns undefined for unknown agent", () => {
@@ -32,8 +37,8 @@ describe("Agent registry", () => {
     expect(agent!.name).toBe("pi");
     expect(agent!.defaultModel).toBe("claude-sonnet-4-6");
     expect(agent!.factoryImport).toBe("pi");
-    expect(agent!.dockerfileTemplate).toContain("FROM");
-    expect(agent!.dockerfileTemplate).toContain(
+    expect(composeAgentDockerfile([agent!.name])).toContain("FROM");
+    expect(composeAgentDockerfile([agent!.name])).toContain(
       "@mariozechner/pi-coding-agent",
     );
   });
@@ -49,8 +54,8 @@ describe("Agent registry", () => {
     expect(agent!.name).toBe("codex");
     expect(agent!.defaultModel).toBe("gpt-5.4-mini");
     expect(agent!.factoryImport).toBe("codex");
-    expect(agent!.dockerfileTemplate).toContain("FROM");
-    expect(agent!.dockerfileTemplate).toContain("@openai/codex");
+    expect(composeAgentDockerfile([agent!.name])).toContain("FROM");
+    expect(composeAgentDockerfile([agent!.name])).toContain("@openai/codex");
   });
 
   it("listAgents includes opencode", () => {
@@ -69,8 +74,10 @@ describe("Agent registry", () => {
     expect(agent!.name).toBe("cursor");
     expect(agent!.defaultModel).toBe("composer-2");
     expect(agent!.factoryImport).toBe("cursor");
-    expect(agent!.dockerfileTemplate).toContain("FROM");
-    expect(agent!.dockerfileTemplate).toContain("cursor.com/install");
+    expect(composeAgentDockerfile([agent!.name])).toContain("FROM");
+    expect(composeAgentDockerfile([agent!.name])).toContain(
+      "cursor.com/install",
+    );
   });
 
   it("getAgent returns opencode entry with expected fields", () => {
@@ -79,8 +86,8 @@ describe("Agent registry", () => {
     expect(agent!.name).toBe("opencode");
     expect(agent!.defaultModel).toBe("opencode/big-pickle");
     expect(agent!.factoryImport).toBe("opencode");
-    expect(agent!.dockerfileTemplate).toContain("FROM");
-    expect(agent!.dockerfileTemplate).toContain("opencode-ai");
+    expect(composeAgentDockerfile([agent!.name])).toContain("FROM");
+    expect(composeAgentDockerfile([agent!.name])).toContain("opencode-ai");
   });
 
   it("listAgents includes copilot", () => {
@@ -93,8 +100,8 @@ describe("Agent registry", () => {
     expect(agent).toBeDefined();
     expect(agent!.name).toBe("copilot");
     expect(agent!.factoryImport).toBe("copilot");
-    expect(agent!.dockerfileTemplate).toContain("FROM");
-    expect(agent!.dockerfileTemplate).toContain("@github/copilot");
+    expect(composeAgentDockerfile([agent!.name])).toContain("FROM");
+    expect(composeAgentDockerfile([agent!.name])).toContain("@github/copilot");
   });
 
   it("default-model lookups for init come from AGENT_DEFAULT_MODELS", () => {
@@ -103,5 +110,73 @@ describe("Agent registry", () => {
         AGENT_DEFAULT_MODELS[agent.name as keyof typeof AGENT_DEFAULT_MODELS],
       );
     }
+  });
+});
+
+describe("composeAgentDockerfile", () => {
+  it("composes multiple agents into a single FROM with all install snippets", () => {
+    const dockerfile = composeAgentDockerfile(["claude-code", "codex"]);
+    // Exactly one base image for the whole composition.
+    expect(dockerfile.match(/^FROM /gm)).toHaveLength(1);
+    // Both per-agent install commands are present.
+    expect(dockerfile).toContain("claude.ai/install.sh");
+    expect(dockerfile).toContain("@openai/codex");
+  });
+
+  it("preserves the {{ISSUE_TRACKER_TOOLS}} placeholder for later substitution", () => {
+    const dockerfile = composeAgentDockerfile(["claude-code", "codex"]);
+    expect(dockerfile).toContain("{{ISSUE_TRACKER_TOOLS}}");
+  });
+
+  it("emits a single USER switch with root installs before and user installs after", () => {
+    const dockerfile = composeAgentDockerfile(["codex", "cursor"]);
+    expect(dockerfile.match(/^USER /gm)).toHaveLength(1);
+    // codex (root install) appears before USER; cursor (user install) after.
+    const userIdx = dockerfile.search(/^USER \$\{AGENT_UID\}/m);
+    expect(dockerfile.indexOf("@openai/codex")).toBeLessThan(userIdx);
+    expect(dockerfile.indexOf("cursor.com/install")).toBeGreaterThan(userIdx);
+  });
+
+  it("throws when given no agents", () => {
+    expect(() => composeAgentDockerfile([])).toThrow();
+  });
+
+  it("throws on an unknown agent", () => {
+    expect(() => composeAgentDockerfile(["nonexistent"])).toThrow();
+  });
+});
+
+describe("composeAgentEnvExample", () => {
+  it("de-duplicates shared key blocks across agents", () => {
+    const env = composeAgentEnvExample(["claude-code", "pi"]);
+    // claude-code and pi both need ANTHROPIC_API_KEY — only one block.
+    expect(env.match(/^ANTHROPIC_API_KEY=/gm)).toHaveLength(1);
+  });
+
+  it("documents AGENT= with the first-selected agent as the default", () => {
+    const env = composeAgentEnvExample(["claude-code", "pi"]);
+    expect(env).toContain("AGENT=claude-code");
+    expect(env).toContain("AGENT_MODEL=");
+  });
+
+  it("documents only the selected agents as valid AGENT values", () => {
+    const env = composeAgentEnvExample(["claude-code", "pi"]);
+    expect(env).toContain("Valid values: claude-code, pi");
+    // Uninstalled agents must not be advertised as valid.
+    expect(env).not.toContain("codex");
+    expect(env).not.toContain("cursor");
+  });
+
+  it("aggregates distinct key blocks for agents with different providers", () => {
+    const env = composeAgentEnvExample(["claude-code", "codex"]);
+    expect(env).toContain("ANTHROPIC_API_KEY=");
+    expect(env).toContain("OPENAI_KEY=");
+  });
+
+  it("bakes a model override into AGENT_MODEL when provided", () => {
+    const env = composeAgentEnvExample(["claude-code"], {
+      modelOverride: "claude-sonnet-4-6",
+    });
+    expect(env).toContain("AGENT_MODEL=claude-sonnet-4-6");
   });
 });

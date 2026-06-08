@@ -1,4 +1,4 @@
-import { run, claudeCode } from "@ai-hero/sandcastle";
+import { run, agent } from "@ai-hero/sandcastle";
 import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
 
 // Simple loop: an agent that picks open issues one by one and closes them.
@@ -12,10 +12,9 @@ await run({
   // Sandbox provider — runs the agent inside an isolated container.
   sandbox: docker(),
 
-  // The agent provider. Pass a model string to claudeCode() — sonnet balances
-  // capability and speed for most tasks. Switch to claude-opus-4-7 for harder
-  // problems, or claude-haiku-4-5-20251001 for speed.
-  agent: claudeCode("claude-sonnet-4-6"),
+  // The agent provider is resolved at runtime by agent(): the AGENT env var
+  // (or this baked default) picks the provider, AGENT_MODEL picks the model.
+  agent: agent({ default: "claude-code" }),
 
   // Path to the prompt file. Shell expressions inside are evaluated inside the
   // sandbox at the start of each iteration, so the agent always sees fresh data.

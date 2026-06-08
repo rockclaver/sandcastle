@@ -30,8 +30,7 @@ const cursorAgent = getAgent("cursor")!;
 const opencodeAgent = getAgent("opencode")!;
 
 const defaultOptions: ScaffoldOptions = {
-  agent: claudeCodeAgent,
-  model: "claude-opus-4-7",
+  agents: [claudeCodeAgent],
 };
 
 const runScaffold = (repoDir: string, options?: Partial<ScaffoldOptions>) =>
@@ -97,7 +96,7 @@ describe("InitService scaffold", () => {
     "generates .env.example with $agent.name env var",
     async ({ agent, expectedKey, unexpectedKey, expectIssue191Link }) => {
       const dir = await makeDir();
-      await runScaffold(dir, { agent, model: agent.defaultModel });
+      await runScaffold(dir, { agents: [agent] });
 
       const envExample = await readFile(
         join(dir, ".sandcastle", ".env.example"),
@@ -193,7 +192,7 @@ describe("InitService scaffold", () => {
     "$name Dockerfile aligns UID/GID with -o so a host GID colliding with a reserved base-image GID (e.g. macOS staff=20) doesn't fail the build",
     async (agent) => {
       const dir = await makeDir();
-      await runScaffold(dir, { agent, model: agent.defaultModel });
+      await runScaffold(dir, { agents: [agent] });
 
       const dockerfile = await readFile(
         join(dir, ".sandcastle", "Dockerfile"),
@@ -285,20 +284,21 @@ describe("InitService scaffold", () => {
 
   // --- main file rewriting ---
 
-  it("scaffolds main.mts with the specified model", async () => {
+  it("scaffolds main.mts with a runtime agent() resolver, not a baked model", async () => {
     const dir = await makeDir();
-    await runScaffold(dir, { model: "claude-sonnet-4-6" });
+    await runScaffold(dir, { modelOverride: "claude-sonnet-4-6" });
 
     const mainTs = await readFile(
       join(dir, ".sandcastle", "main.mts"),
       "utf-8",
     );
-    expect(mainTs).toContain('claudeCode("claude-sonnet-4-6")');
-    // Should not contain the template's original model
-    expect(mainTs).not.toContain('claudeCode("claude-opus-4-7")');
+    // Model is resolved at runtime via AGENT_MODEL, never baked into main.mts.
+    expect(mainTs).toContain('agent({ default: "claude-code" })');
+    expect(mainTs).not.toContain('claudeCode("');
+    expect(mainTs).not.toContain("claude-sonnet-4-6");
   });
 
-  it("scaffolds main.mts with default model when using agent default", async () => {
+  it("scaffolds main.mts with first-selected agent as the agent() default", async () => {
     const dir = await makeDir();
     await runScaffold(dir);
 
@@ -306,7 +306,7 @@ describe("InitService scaffold", () => {
       join(dir, ".sandcastle", "main.mts"),
       "utf-8",
     );
-    expect(mainTs).toContain('claudeCode("claude-opus-4-7")');
+    expect(mainTs).toContain('agent({ default: "claude-code" })');
   });
 
   // --- Template-specific tests ---
@@ -742,7 +742,7 @@ describe("InitService scaffold", () => {
 
   it("scaffolds pi agent with pi Dockerfile", async () => {
     const dir = await makeDir();
-    await runScaffold(dir, { agent: piAgent, model: "claude-sonnet-4-6" });
+    await runScaffold(dir, { agents: [piAgent] });
 
     const dockerfile = await readFile(
       join(dir, ".sandcastle", "Dockerfile"),
@@ -753,21 +753,21 @@ describe("InitService scaffold", () => {
     expect(dockerfile).not.toContain("{{ISSUE_TRACKER_TOOLS}}");
   });
 
-  it("scaffolds main.mts with pi factory import when pi agent selected", async () => {
+  it("scaffolds main.mts with pi as the agent() default when pi agent selected", async () => {
     const dir = await makeDir();
-    await runScaffold(dir, { agent: piAgent, model: "claude-sonnet-4-6" });
+    await runScaffold(dir, { agents: [piAgent] });
 
     const mainTs = await readFile(
       join(dir, ".sandcastle", "main.mts"),
       "utf-8",
     );
-    expect(mainTs).toContain('pi("claude-sonnet-4-6")');
+    expect(mainTs).toContain('agent({ default: "pi" })');
     expect(mainTs).not.toContain("claudeCode");
   });
 
   it("scaffolds codex agent with codex Dockerfile", async () => {
     const dir = await makeDir();
-    await runScaffold(dir, { agent: codexAgent, model: "gpt-5.4-mini" });
+    await runScaffold(dir, { agents: [codexAgent] });
 
     const dockerfile = await readFile(
       join(dir, ".sandcastle", "Dockerfile"),
@@ -778,21 +778,21 @@ describe("InitService scaffold", () => {
     expect(dockerfile).not.toContain("{{ISSUE_TRACKER_TOOLS}}");
   });
 
-  it("scaffolds main.mts with codex factory import when codex agent selected", async () => {
+  it("scaffolds main.mts with codex as the agent() default when codex agent selected", async () => {
     const dir = await makeDir();
-    await runScaffold(dir, { agent: codexAgent, model: "gpt-5.4-mini" });
+    await runScaffold(dir, { agents: [codexAgent] });
 
     const mainTs = await readFile(
       join(dir, ".sandcastle", "main.mts"),
       "utf-8",
     );
-    expect(mainTs).toContain('codex("gpt-5.4-mini")');
+    expect(mainTs).toContain('agent({ default: "codex" })');
     expect(mainTs).not.toContain("claudeCode");
   });
 
   it("scaffolds cursor agent with cursor Dockerfile", async () => {
     const dir = await makeDir();
-    await runScaffold(dir, { agent: cursorAgent, model: "claude-sonnet-4-6" });
+    await runScaffold(dir, { agents: [cursorAgent] });
 
     const dockerfile = await readFile(
       join(dir, ".sandcastle", "Dockerfile"),
@@ -809,15 +809,15 @@ describe("InitService scaffold", () => {
     expect(dockerfile).not.toContain("{{ISSUE_TRACKER_TOOLS}}");
   });
 
-  it("scaffolds main.mts with cursor factory import when cursor agent selected", async () => {
+  it("scaffolds main.mts with cursor as the agent() default when cursor agent selected", async () => {
     const dir = await makeDir();
-    await runScaffold(dir, { agent: cursorAgent, model: "claude-sonnet-4-6" });
+    await runScaffold(dir, { agents: [cursorAgent] });
 
     const mainTs = await readFile(
       join(dir, ".sandcastle", "main.mts"),
       "utf-8",
     );
-    expect(mainTs).toContain('cursor("claude-sonnet-4-6")');
+    expect(mainTs).toContain('agent({ default: "cursor" })');
     expect(mainTs).not.toContain("claudeCode");
   });
 
@@ -962,7 +962,7 @@ describe("InitService scaffold", () => {
       expect(mainTs).toContain('"@ai-hero/sandcastle"');
     });
 
-    it("main.mts references the specified model for all factory calls", async () => {
+    it("main.mts uses agent() resolvers for all factory calls, not baked models", async () => {
       const dir = await makeDir();
       await runScaffold(dir, { templateName: "parallel-planner" });
 
@@ -970,8 +970,9 @@ describe("InitService scaffold", () => {
         join(dir, ".sandcastle", "main.mts"),
         "utf-8",
       );
-      // All factory calls should use the specified model (default: claude-opus-4-7)
-      expect(mainTs).toContain("claude-opus-4-7");
+      // Models are resolved at runtime via agent(); no model string is baked in.
+      expect(mainTs).toContain('agent({ default: "claude-code" })');
+      expect(mainTs).not.toContain("claude-opus-4-7");
     });
 
     it("implement-prompt.md contains {{TASK_ID}}, {{ISSUE_TITLE}}, {{BRANCH}} prompt arguments", async () => {
@@ -1215,7 +1216,7 @@ describe("InitService scaffold", () => {
       expect(envExample).toContain("GH_TOKEN=");
     });
 
-    it("main.mts references the specified model for all factory calls", async () => {
+    it("main.mts uses agent() resolvers for all factory calls, not baked models", async () => {
       const dir = await makeDir();
       await runScaffold(dir, { templateName: "parallel-planner-with-review" });
 
@@ -1223,7 +1224,8 @@ describe("InitService scaffold", () => {
         join(dir, ".sandcastle", "main.mts"),
         "utf-8",
       );
-      expect(mainTs).toContain("claude-opus-4-7");
+      expect(mainTs).toContain('agent({ default: "claude-code" })');
+      expect(mainTs).not.toContain("claude-opus-4-7");
     });
 
     it("scaffolds CODING_STANDARDS.md with minimal starter content", async () => {
@@ -2104,8 +2106,7 @@ describe("InitService scaffold", () => {
     it("scaffold with beads + pi agent produces Dockerfile with beads install and pi agent", async () => {
       const dir = await makeDir();
       await runScaffold(dir, {
-        agent: piAgent,
-        model: "claude-sonnet-4-6",
+        agents: [piAgent],
         issueTracker: getIssueTracker("beads"),
       });
 
@@ -2192,22 +2193,22 @@ describe("InitService scaffold", () => {
         "utf-8",
       );
       expect(mainContent).toContain("@ai-hero/sandcastle");
-      expect(mainContent).toContain('claudeCode("claude-opus-4-7")');
+      expect(mainContent).toContain('agent({ default: "claude-code" })');
     });
 
-    it("main.ts scaffolded with type: module rewrites agent factory correctly", async () => {
+    it("main.ts scaffolded with type: module rewrites agent() default correctly", async () => {
       const dir = await makeDir();
       await writeFile(
         join(dir, "package.json"),
         JSON.stringify({ name: "test", type: "module" }),
       );
-      await runScaffold(dir, { agent: piAgent, model: "claude-sonnet-4-6" });
+      await runScaffold(dir, { agents: [piAgent] });
 
       const mainContent = await readFile(
         join(dir, ".sandcastle", "main.ts"),
         "utf-8",
       );
-      expect(mainContent).toContain('pi("claude-sonnet-4-6")');
+      expect(mainContent).toContain('agent({ default: "pi" })');
       expect(mainContent).not.toContain("claudeCode");
     });
 
@@ -2328,7 +2329,7 @@ describe("InitService scaffold", () => {
         "utf-8",
       );
       expect(mainTs).toContain(
-        'import { run, claudeCode } from "@ai-hero/sandcastle"',
+        'import { run, agent } from "@ai-hero/sandcastle"',
       );
       expect(mainTs).toContain(
         'import { docker } from "@ai-hero/sandcastle/sandboxes/docker"',

@@ -188,12 +188,26 @@ export const hostHasDependency = (
 // Agent registry (internal — not part of public API)
 // ---------------------------------------------------------------------------
 
+/**
+ * Per-agent Dockerfile install steps, composed by `composeAgentDockerfile` onto
+ * a shared base. `root` snippets run before the `USER agent` switch (global npm
+ * installs); `user` snippets run after it (installers that write to the agent's
+ * home, e.g. `~/.local/bin`). `pathAddition` is a directory prepended to PATH
+ * once for the whole image, de-duplicated across agents.
+ */
+export interface DockerInstall {
+  readonly root?: string;
+  readonly user?: string;
+  readonly pathAddition?: string;
+}
+
 export interface AgentEntry {
   readonly name: string;
   readonly label: string;
   readonly defaultModel: string;
   readonly factoryImport: string;
-  readonly dockerfileTemplate: string;
+  /** Per-agent install steps composed onto the shared base by `composeAgentDockerfile`. */
+  readonly dockerInstall: DockerInstall;
   /** Lines to include in the generated `.env.example` for this agent's API key. */
   readonly envExample: string;
   /**
@@ -205,7 +219,11 @@ export interface AgentEntry {
   readonly setupCommand: string;
 }
 
-const CLAUDE_CODE_DOCKERFILE = `FROM node:22-bookworm
+// Shared Dockerfile base composed by `composeAgentDockerfile`. The head ends
+// just before the `USER agent` switch so root-phase installs can be inserted;
+// the tail starts at WORKDIR so user-phase installs and PATH additions slot in
+// between. `{{ISSUE_TRACKER_TOOLS}}` is preserved for later substitution.
+const DOCKERFILE_BASE_HEAD = `FROM node:22-bookworm
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \\
@@ -223,189 +241,36 @@ ARG AGENT_UID=1000
 ARG AGENT_GID=1000
 
 # Rename the base image's "node" user to "agent" and align UID/GID.
-RUN groupmod -o -g $AGENT_GID node && usermod -o -u $AGENT_UID -g $AGENT_GID -d /home/agent -m -l agent node
-USER \${AGENT_UID}:\${AGENT_GID}
+RUN groupmod -o -g $AGENT_GID node && usermod -o -u $AGENT_UID -g $AGENT_GID -d /home/agent -m -l agent node`;
 
-# Install Claude Code CLI
-RUN curl -fsSL https://claude.ai/install.sh | bash
-
-# Add Claude to PATH
-ENV PATH="/home/agent/.local/bin:$PATH"
-
-WORKDIR /home/agent
+const DOCKERFILE_BASE_TAIL = `WORKDIR /home/agent
 
 # In worktree sandbox mode, Sandcastle bind-mounts the git worktree at ${SANDBOX_REPO_DIR}
 # and overrides the working directory to ${SANDBOX_REPO_DIR} at container start.
 # Structure your Dockerfile so that ${SANDBOX_REPO_DIR} can serve as the project root.
-ENTRYPOINT ["sleep", "infinity"]
-`;
+ENTRYPOINT ["sleep", "infinity"]`;
 
-const PI_DOCKERFILE = `FROM node:22-bookworm
+// Per-agent install snippets, slotted into the shared base. `root` snippets run
+// as root before the USER switch; `user` snippets run as the agent user after.
+const CLAUDE_CODE_INSTALL = `# Install Claude Code CLI
+RUN curl -fsSL https://claude.ai/install.sh | bash`;
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \\
-  git \\
-  curl \\
-  jq \\
-  && rm -rf /var/lib/apt/lists/*
+const PI_INSTALL = `# Install pi coding agent (run as root before USER agent)
+RUN npm install -g @mariozechner/pi-coding-agent`;
 
-{{ISSUE_TRACKER_TOOLS}}
+const CODEX_INSTALL = `# Install Codex CLI (run as root before USER agent)
+RUN npm install -g @openai/codex`;
 
-# Build-args for UID/GID alignment: sandcastle docker build-image
-# defaults these to the host user's UID/GID so image-built files
-# and bind-mounted files share an owner without runtime chown.
-ARG AGENT_UID=1000
-ARG AGENT_GID=1000
+const CURSOR_INSTALL = `# Install Cursor Agent CLI
+RUN curl https://cursor.com/install -fsS | bash`;
 
-# Rename the base image's "node" user to "agent" and align UID/GID.
-RUN groupmod -o -g $AGENT_GID node && usermod -o -u $AGENT_UID -g $AGENT_GID -d /home/agent -m -l agent node
+const OPENCODE_INSTALL = `# Install OpenCode CLI (run as root before USER agent)
+RUN npm install -g opencode-ai@latest`;
 
-# Install pi coding agent (run as root before USER agent)
-RUN npm install -g @mariozechner/pi-coding-agent
+const COPILOT_INSTALL = `# Install GitHub Copilot CLI (run as root before USER agent)
+RUN npm install -g @github/copilot`;
 
-USER \${AGENT_UID}:\${AGENT_GID}
-
-WORKDIR /home/agent
-
-# In worktree sandbox mode, Sandcastle bind-mounts the git worktree at ${SANDBOX_REPO_DIR}
-# and overrides the working directory to ${SANDBOX_REPO_DIR} at container start.
-# Structure your Dockerfile so that ${SANDBOX_REPO_DIR} can serve as the project root.
-ENTRYPOINT ["sleep", "infinity"]
-`;
-
-const CODEX_DOCKERFILE = `FROM node:22-bookworm
-
-# Install system dependencies
-RUN apt-get update && apt-get install -y \\
-  git \\
-  curl \\
-  jq \\
-  && rm -rf /var/lib/apt/lists/*
-
-{{ISSUE_TRACKER_TOOLS}}
-
-# Build-args for UID/GID alignment: sandcastle docker build-image
-# defaults these to the host user's UID/GID so image-built files
-# and bind-mounted files share an owner without runtime chown.
-ARG AGENT_UID=1000
-ARG AGENT_GID=1000
-
-# Rename the base image's "node" user to "agent" and align UID/GID.
-RUN groupmod -o -g $AGENT_GID node && usermod -o -u $AGENT_UID -g $AGENT_GID -d /home/agent -m -l agent node
-
-# Install Codex CLI (run as root before USER agent)
-RUN npm install -g @openai/codex
-
-USER \${AGENT_UID}:\${AGENT_GID}
-
-WORKDIR /home/agent
-
-# In worktree sandbox mode, Sandcastle bind-mounts the git worktree at ${SANDBOX_REPO_DIR}
-# and overrides the working directory to ${SANDBOX_REPO_DIR} at container start.
-# Structure your Dockerfile so that ${SANDBOX_REPO_DIR} can serve as the project root.
-ENTRYPOINT ["sleep", "infinity"]
-`;
-
-const CURSOR_DOCKERFILE = `FROM node:22-bookworm
-
-# Install system dependencies
-RUN apt-get update && apt-get install -y \\
-  git \\
-  curl \\
-  jq \\
-  && rm -rf /var/lib/apt/lists/*
-
-{{ISSUE_TRACKER_TOOLS}}
-
-# Build-args for UID/GID alignment: sandcastle docker build-image
-# defaults these to the host user's UID/GID so image-built files
-# and bind-mounted files share an owner without runtime chown.
-ARG AGENT_UID=1000
-ARG AGENT_GID=1000
-
-# Rename the base image's "node" user to "agent" and align UID/GID.
-RUN groupmod -g $AGENT_GID node && usermod -u $AGENT_UID -g $AGENT_GID -d /home/agent -m -l agent node
-USER \${AGENT_UID}:\${AGENT_GID}
-
-# Install Cursor Agent CLI
-RUN curl https://cursor.com/install -fsS | bash
-
-# Add Cursor CLI to PATH
-ENV PATH="/home/agent/.local/bin:$PATH"
-
-WORKDIR /home/agent
-
-# In worktree sandbox mode, Sandcastle bind-mounts the git worktree at ${SANDBOX_REPO_DIR}
-# and overrides the working directory to ${SANDBOX_REPO_DIR} at container start.
-# Structure your Dockerfile so that ${SANDBOX_REPO_DIR} can serve as the project root.
-ENTRYPOINT ["sleep", "infinity"]
-`;
-
-const OPENCODE_DOCKERFILE = `FROM node:22-bookworm
-
-# Install system dependencies
-RUN apt-get update && apt-get install -y \\
-  git \\
-  curl \\
-  jq \\
-  && rm -rf /var/lib/apt/lists/*
-
-{{ISSUE_TRACKER_TOOLS}}
-
-# Build-args for UID/GID alignment: sandcastle docker build-image
-# defaults these to the host user's UID/GID so image-built files
-# and bind-mounted files share an owner without runtime chown.
-ARG AGENT_UID=1000
-ARG AGENT_GID=1000
-
-# Rename the base image's "node" user to "agent" and align UID/GID.
-RUN groupmod -o -g $AGENT_GID node && usermod -o -u $AGENT_UID -g $AGENT_GID -d /home/agent -m -l agent node
-
-# Install OpenCode CLI (run as root before USER agent)
-RUN npm install -g opencode-ai@latest
-
-USER \${AGENT_UID}:\${AGENT_GID}
-
-WORKDIR /home/agent
-
-# In worktree sandbox mode, Sandcastle bind-mounts the git worktree at \${SANDBOX_REPO_DIR}
-# and overrides the working directory to \${SANDBOX_REPO_DIR} at container start.
-# Structure your Dockerfile so that \${SANDBOX_REPO_DIR} can serve as the project root.
-ENTRYPOINT ["sleep", "infinity"]
-`;
-
-const COPILOT_DOCKERFILE = `FROM node:22-bookworm
-
-# Install system dependencies
-RUN apt-get update && apt-get install -y \\
-  git \\
-  curl \\
-  jq \\
-  && rm -rf /var/lib/apt/lists/*
-
-{{ISSUE_TRACKER_TOOLS}}
-
-# Build-args for UID/GID alignment: sandcastle docker build-image
-# defaults these to the host user's UID/GID so image-built files
-# and bind-mounted files share an owner without runtime chown.
-ARG AGENT_UID=1000
-ARG AGENT_GID=1000
-
-# Rename the base image's "node" user to "agent" and align UID/GID.
-RUN groupmod -o -g $AGENT_GID node && usermod -o -u $AGENT_UID -g $AGENT_GID -d /home/agent -m -l agent node
-
-# Install GitHub Copilot CLI (run as root before USER agent)
-RUN npm install -g @github/copilot
-
-USER \${AGENT_UID}:\${AGENT_GID}
-
-WORKDIR /home/agent
-
-# In worktree sandbox mode, Sandcastle bind-mounts the git worktree at \${SANDBOX_REPO_DIR}
-# and overrides the working directory to \${SANDBOX_REPO_DIR} at container start.
-# Structure your Dockerfile so that \${SANDBOX_REPO_DIR} can serve as the project root.
-ENTRYPOINT ["sleep", "infinity"]
-`;
+const AGENT_LOCAL_BIN = "/home/agent/.local/bin";
 
 const AGENT_REGISTRY: AgentEntry[] = [
   {
@@ -413,7 +278,7 @@ const AGENT_REGISTRY: AgentEntry[] = [
     label: "Claude Code",
     defaultModel: AGENT_DEFAULT_MODELS["claude-code"],
     factoryImport: "claudeCode",
-    dockerfileTemplate: CLAUDE_CODE_DOCKERFILE,
+    dockerInstall: { user: CLAUDE_CODE_INSTALL, pathAddition: AGENT_LOCAL_BIN },
     envExample: `# Anthropic API key
 # If you want to use your Claude subscription instead of an API key, see https://github.com/mattpocock/sandcastle/issues/191
 ANTHROPIC_API_KEY=`,
@@ -424,7 +289,7 @@ ANTHROPIC_API_KEY=`,
     label: "Pi",
     defaultModel: AGENT_DEFAULT_MODELS.pi,
     factoryImport: "pi",
-    dockerfileTemplate: PI_DOCKERFILE,
+    dockerInstall: { root: PI_INSTALL },
     envExample: `# Anthropic API key
 ANTHROPIC_API_KEY=`,
     setupCommand: `pi "$(cat ${SETUP_ISSUE_TRACKER_PATH})"`,
@@ -434,7 +299,7 @@ ANTHROPIC_API_KEY=`,
     label: "Codex",
     defaultModel: AGENT_DEFAULT_MODELS.codex,
     factoryImport: "codex",
-    dockerfileTemplate: CODEX_DOCKERFILE,
+    dockerInstall: { root: CODEX_INSTALL },
     envExample: `# OpenAI API key
 OPENAI_KEY=`,
     setupCommand: `codex "$(cat ${SETUP_ISSUE_TRACKER_PATH})"`,
@@ -444,7 +309,7 @@ OPENAI_KEY=`,
     label: "Cursor",
     defaultModel: AGENT_DEFAULT_MODELS.cursor,
     factoryImport: "cursor",
-    dockerfileTemplate: CURSOR_DOCKERFILE,
+    dockerInstall: { user: CURSOR_INSTALL, pathAddition: AGENT_LOCAL_BIN },
     envExample: `# Cursor API key (recommended)
 # You can also pass --api-key directly to the agent CLI.
 CURSOR_API_KEY=`,
@@ -455,7 +320,7 @@ CURSOR_API_KEY=`,
     label: "OpenCode",
     defaultModel: AGENT_DEFAULT_MODELS.opencode,
     factoryImport: "opencode",
-    dockerfileTemplate: OPENCODE_DOCKERFILE,
+    dockerInstall: { root: OPENCODE_INSTALL },
     envExample: `# OpenCode API key
 OPENCODE_API_KEY=`,
     setupCommand: `opencode -p "$(cat ${SETUP_ISSUE_TRACKER_PATH})"`,
@@ -465,7 +330,7 @@ OPENCODE_API_KEY=`,
     label: "GitHub Copilot CLI",
     defaultModel: AGENT_DEFAULT_MODELS.copilot,
     factoryImport: "copilot",
-    dockerfileTemplate: COPILOT_DOCKERFILE,
+    dockerInstall: { root: COPILOT_INSTALL },
     envExample: `# GitHub token with the "Copilot Requests" permission
 # (a fine-grained PAT, or any token from \`gh auth login\`).
 # COPILOT_GITHUB_TOKEN takes precedence over GH_TOKEN and GITHUB_TOKEN.
@@ -475,6 +340,110 @@ GITHUB_TOKEN=`,
 ];
 
 export const listAgents = (): AgentEntry[] => AGENT_REGISTRY;
+
+const resolveAgentEntries = (agentNames: readonly string[]): AgentEntry[] => {
+  if (agentNames.length === 0) {
+    throw new Error("At least one agent must be selected.");
+  }
+  return agentNames.map((name) => {
+    const entry = AGENT_REGISTRY.find((a) => a.name === name);
+    if (!entry) {
+      const valid = AGENT_REGISTRY.map((a) => a.name).join(", ");
+      throw new Error(`Unknown agent "${name}". Valid agents: ${valid}`);
+    }
+    return entry;
+  });
+};
+
+/**
+ * Compose a single Dockerfile that installs every selected agent's CLI onto one
+ * shared base image. Root-phase installs (global npm) run before the `USER
+ * agent` switch; user-phase installs (home-dir installers) run after it; PATH
+ * additions are de-duplicated. `{{ISSUE_TRACKER_TOOLS}}` is preserved for later
+ * substitution by `substituteTemplateArgs`.
+ */
+export const composeAgentDockerfile = (
+  agentNames: readonly string[],
+): string => {
+  const entries = resolveAgentEntries(agentNames);
+
+  const rootInstalls = entries
+    .map((e) => e.dockerInstall.root)
+    .filter((s): s is string => Boolean(s));
+  const userInstalls = entries
+    .map((e) => e.dockerInstall.user)
+    .filter((s): s is string => Boolean(s));
+  const pathAdditions = [
+    ...new Set(
+      entries
+        .map((e) => e.dockerInstall.pathAddition)
+        .filter((s): s is string => Boolean(s)),
+    ),
+  ];
+
+  const sections: string[] = [DOCKERFILE_BASE_HEAD];
+  if (rootInstalls.length > 0) sections.push(rootInstalls.join("\n\n"));
+  sections.push("USER ${AGENT_UID}:${AGENT_GID}");
+  if (userInstalls.length > 0) sections.push(userInstalls.join("\n\n"));
+  if (pathAdditions.length > 0) {
+    const pathValue = [...pathAdditions, "$PATH"].join(":");
+    sections.push(
+      `# Add installed agent CLIs to PATH\nENV PATH="${pathValue}"`,
+    );
+  }
+  sections.push(DOCKERFILE_BASE_TAIL);
+
+  return sections.join("\n\n") + "\n";
+};
+
+/**
+ * Compose the agent portion of `.env.example` for the selected agents. Per-agent
+ * key blocks are aggregated and de-duplicated by env var name (so selecting two
+ * Anthropic-backed agents yields a single `ANTHROPIC_API_KEY`). Documented
+ * `AGENT=`/`AGENT_MODEL=` lines — listing the valid agent names and the default
+ * (the first selected agent) — are appended last, after any `extraEnvBlocks`
+ * (e.g. the issue tracker's block).
+ */
+export const composeAgentEnvExample = (
+  agentNames: readonly string[],
+  options?: {
+    readonly modelOverride?: string;
+    readonly extraEnvBlocks?: readonly string[];
+  },
+): string => {
+  const entries = resolveAgentEntries(agentNames);
+
+  const seenVars = new Set<string>();
+  const keyBlocks: string[] = [];
+  for (const entry of entries) {
+    const vars = [...entry.envExample.matchAll(/^([A-Z][A-Z0-9_]*)=/gm)].map(
+      (m) => m[1]!,
+    );
+    if (vars.some((v) => seenVars.has(v))) continue;
+    vars.forEach((v) => seenVars.add(v));
+    keyBlocks.push(entry.envExample);
+  }
+
+  const defaultName = entries[0]!.name;
+  // Only the selected agents are installed in the generated image, so only they
+  // are valid AGENT values — documenting an uninstalled agent would make agent()
+  // resolve to a CLI that was never installed.
+  const validNames = entries.map((a) => a.name).join(", ");
+  const modelLine = options?.modelOverride
+    ? `AGENT_MODEL=${options.modelOverride}`
+    : "# AGENT_MODEL=";
+  const agentDoc = `# --- Agent selection (resolved at runtime by agent()) ---
+# AGENT: which agent provider to use.
+# Valid values: ${validNames}
+# Defaults to "${defaultName}" when unset.
+AGENT=${defaultName}
+# AGENT_MODEL: override the selected agent's default model (optional).
+${modelLine}`;
+
+  return [...keyBlocks, ...(options?.extraEnvBlocks ?? []), agentDoc].join(
+    "\n\n",
+  );
+};
 
 // ---------------------------------------------------------------------------
 // Issue tracker registry (internal — not part of public API)
@@ -749,8 +718,7 @@ const copyTemplateFiles = (
  */
 const rewriteMainTs = (
   configDir: string,
-  agent: AgentEntry,
-  model: string,
+  defaultAgentName: string,
   sandboxProvider: SandboxProviderEntry,
   mainFilename: string,
 ): Effect.Effect<void, Error, FileSystem.FileSystem> =>
@@ -773,18 +741,13 @@ const rewriteMainTs = (
       content = content.replace(/main\.mts/g, "main.ts");
     }
 
-    // Replace factory function name in imports (e.g. claudeCode → pi)
-    // and all factory calls with the correct model.
-    // Templates always use claudeCode as the placeholder factory.
-    content = content.replace(/\bclaudeCode\b/g, agent.factoryImport);
-    // Replace model strings in factory calls: factoryImport("any-model")
-    const factoryCallRe = new RegExp(
-      `${agent.factoryImport}\\(["']([^"']+)["']\\)`,
-      "g",
-    );
+    // Templates call the runtime resolver `agent({ default: "claude-code" })`
+    // as a placeholder. Inject the first-selected agent as the baked default;
+    // the actual provider and model are still resolved at runtime from the
+    // AGENT / AGENT_MODEL env vars. A no-op when claude-code is the default.
     content = content.replace(
-      factoryCallRe,
-      `${agent.factoryImport}("${model}")`,
+      /agent\(\{\s*default:\s*"[^"]*"\s*\}\)/g,
+      `agent({ default: "${defaultAgentName}" })`,
     );
 
     // Replace the sandbox provider. Templates always use `docker` as the
@@ -963,8 +926,10 @@ Run your **list** command inside the built image and confirm it returns the open
 // ---------------------------------------------------------------------------
 
 export interface ScaffoldOptions {
-  agent: AgentEntry;
-  model: string;
+  /** Selected agents. The first is baked as the generated `agent({ default })`. */
+  agents: AgentEntry[];
+  /** Optional `AGENT_MODEL` value pre-filled in `.env.example`. Not baked into main. */
+  modelOverride?: string;
   templateName?: string;
   createLabel?: boolean;
   issueTracker?: IssueTrackerEntry;
@@ -1006,13 +971,17 @@ export const scaffold = (
 ): Effect.Effect<ScaffoldResult, Error, FileSystem.FileSystem> =>
   Effect.gen(function* () {
     const {
-      agent,
-      model,
+      agents,
+      modelOverride,
       templateName = "blank",
       createLabel = true,
       issueTracker = ISSUE_TRACKER_REGISTRY[0]!, // default: github-issues
       sandboxProvider = SANDBOX_PROVIDER_REGISTRY[0]!, // default: docker
     } = options;
+    if (agents.length === 0) {
+      yield* Effect.fail(new Error("At least one agent must be selected."));
+    }
+    const agentNames = agents.map((a) => a.name);
     const fs = yield* FileSystem.FileSystem;
     const configDir = join(repoDir, ".sandcastle");
 
@@ -1035,19 +1004,22 @@ export const scaffold = (
 
     const templateDir = yield* getTemplateDir(templateName);
 
-    // Build .env.example from agent + issue tracker env blocks
-    const envExampleParts = [agent.envExample];
-    if (issueTracker.envExample) {
-      envExampleParts.push(issueTracker.envExample);
-    }
-    const envExampleContent = envExampleParts.join("\n") + "\n";
+    // Build .env.example from the de-duplicated agent key blocks, the issue
+    // tracker block, and the appended AGENT=/AGENT_MODEL= documentation.
+    const envExampleContent =
+      composeAgentEnvExample(agentNames, {
+        modelOverride,
+        extraEnvBlocks: issueTracker.envExample
+          ? [issueTracker.envExample]
+          : [],
+      }) + "\n";
 
     yield* Effect.all(
       [
         fs
           .writeFileString(
             join(configDir, sandboxProvider.containerfileName),
-            agent.dockerfileTemplate,
+            composeAgentDockerfile(agentNames),
           )
           .pipe(Effect.mapError((e) => new Error(e.message))),
         fs
@@ -1061,11 +1033,11 @@ export const scaffold = (
       { concurrency: "unbounded" },
     );
 
-    // Rewrite main file with the selected agent factory, model, and sandbox provider
+    // Rewrite main file: inject the default agent name into the resolver call
+    // and rewrite the sandbox provider.
     yield* rewriteMainTs(
       configDir,
-      agent,
-      model,
+      agentNames[0]!,
       sandboxProvider,
       mainFilename,
     );
