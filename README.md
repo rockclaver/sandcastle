@@ -689,6 +689,37 @@ try {
 }
 ```
 
+### Profiles
+
+A **profile** describes the language/stack of the repo Sandcastle is operating on, so the scaffolded prompts and `main` setup point your agent at the right toolchain instead of assuming npm. Profiles are an internal registry shipped with Sandcastle — in v1 they are not user-defined config, and selecting one does **not** install, pin, or manage any SDK. The built-in profiles are `js-ts`, `flutter`, `dart`, and `go`.
+
+Select one or more profiles during `sandcastle init`. The interactive prompt is a multi-select with `js-ts` selected by default; non-interactively, pass a comma-separated `--profile` flag:
+
+```bash
+# A Flutter app with a Go backend
+npx @rockclaver/sandcastle init --profile flutter,go
+
+# JS/TS only (the default when --profile is omitted)
+npx @rockclaver/sandcastle init --profile js-ts
+```
+
+Profile names are de-duplicated while preserving first-occurrence order, and an unknown name fails fast with an error listing the valid profiles.
+
+**Generated guidance files.** Each selected profile scaffolds a guidance markdown file plus a metadata file under `.sandcastle/profiles/`:
+
+```
+.sandcastle/profiles/
+├── profiles.json   # Metadata: selected profiles + the path to each guidance file
+├── flutter.md      # Per-profile guidance (one per selected profile)
+└── go.md
+```
+
+Each `<profile>.md` describes the stack and lists suggested **setup** and **validation** commands (e.g. `flutter pub get` / `flutter analyze` / `flutter test` for Flutter, `go build ./...` / `go vet ./...` / `go test ./...` for Go). `profiles.json` lets templates and tooling discover which profiles were selected and where their guidance lives.
+
+**How agents use them.** Every scaffolded prompt gains a "Project profiles" section that links the generated guidance files and instructs the agent to read each one and follow its setup and validation commands rather than assuming a fixed toolchain. When no JS/TS profile is selected, the generated `main` setup hook runs the primary profile's setup command (e.g. `flutter pub get`, `go mod download`) instead of `npm install`. The commands in the guidance files are advisory, not a contract — the agent should adapt them to the project's actual scripts.
+
+**Out of scope.** Profiles are guidance only. Sandcastle does **not** install Flutter, Dart, or Go; does **not** pin or manage SDK versions; and assumes the relevant toolchain is already available in the sandbox image. Pin or install SDKs yourself by editing the scaffolded `Dockerfile`/`Containerfile`.
+
 ### Templates
 
 `sandcastle init` prompts you to choose project profiles, a sandbox provider (Docker or Podman), an issue tracker (GitHub Issues, Beads, or Custom), and a template, which scaffolds a ready-to-use prompt and `main.mts` suited to a specific workflow. If your project's `package.json` has `"type": "module"`, the file will be named `main.ts` instead. The scaffolded prompts reference your selected profile guidance under `.sandcastle/profiles/` instead of assuming a fixed toolchain, and when no JS/TS profile is selected the generated `main` setup hook uses that profile's setup command (e.g. `flutter pub get`, `go mod download`) rather than `npm install`. Choosing **Custom** scaffolds the project in a deliberately broken-until-configured state plus a `.sandcastle/SETUP_ISSUE_TRACKER.md` prompt you feed to your coding agent, which wires up your own tracker by editing the scaffolded files in place. Five templates are available:
