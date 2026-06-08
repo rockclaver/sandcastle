@@ -159,6 +159,14 @@ describe("composeAgentEnvExample", () => {
     expect(env).toContain("AGENT_MODEL=");
   });
 
+  it("documents only the selected agents as valid AGENT values", () => {
+    const env = composeAgentEnvExample(["claude-code", "pi"]);
+    expect(env).toContain("Valid values: claude-code, pi");
+    // Uninstalled agents must not be advertised as valid.
+    expect(env).not.toContain("codex");
+    expect(env).not.toContain("cursor");
+  });
+
   it("aggregates distinct key blocks for agents with different providers", () => {
     const env = composeAgentEnvExample(["claude-code", "codex"]);
     expect(env).toContain("ANTHROPIC_API_KEY=");

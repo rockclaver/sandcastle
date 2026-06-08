@@ -425,7 +425,10 @@ export const composeAgentEnvExample = (
   }
 
   const defaultName = entries[0]!.name;
-  const validNames = AGENT_REGISTRY.map((a) => a.name).join(", ");
+  // Only the selected agents are installed in the generated image, so only they
+  // are valid AGENT values — documenting an uninstalled agent would make agent()
+  // resolve to a CLI that was never installed.
+  const validNames = entries.map((a) => a.name).join(", ");
   const modelLine = options?.modelOverride
     ? `AGENT_MODEL=${options.modelOverride}`
     : "# AGENT_MODEL=";
