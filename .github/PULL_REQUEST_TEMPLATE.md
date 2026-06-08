@@ -1,4 +1,5 @@
 <!-- Link the phase issue this PR implements. CI reads this to track acceptance criteria. -->
+
 Closes #
 
 ## Summary
@@ -16,8 +17,8 @@ Closes #
 Every acceptance criterion must be proven by an automated test.
 
 | Acceptance criterion | Test file | Test name |
-| --- | --- | --- |
-|  |  |  |
+| -------------------- | --------- | --------- |
+|                      |           |           |
 
 ## Merge checklist
 

@@ -330,13 +330,18 @@ describe("podman()", () => {
   });
 
   it("throws a clear error when image is not found locally", async () => {
-    mockPodmanSuccess();
-    mockExecFile.mockImplementationOnce((_command, args, callback: any) => {
+    mockExecFile.mockImplementation((_command, args, ...rest: any[]) => {
+      const callback = rest[rest.length - 1];
+      if (
+        Array.isArray(args) &&
+        args[0] === "image" &&
+        args[1] === "inspect" &&
+        args[2] === "my-app:latest"
+      ) {
+        callback(new Error("no such image"), "", "");
+        return undefined as any;
+      }
       callback(null, podmanStdout(args), "");
-      return undefined as any;
-    });
-    mockExecFile.mockImplementationOnce((_command, _args, callback: any) => {
-      callback(new Error("no such image"), "", "");
       return undefined as any;
     });
 
