@@ -691,7 +691,7 @@ try {
 
 ### Templates
 
-`sandcastle init` prompts you to choose a sandbox provider (Docker or Podman), an issue tracker (GitHub Issues, Beads, or Custom), and a template, which scaffolds a ready-to-use prompt and `main.mts` suited to a specific workflow. If your project's `package.json` has `"type": "module"`, the file will be named `main.ts` instead. Choosing **Custom** scaffolds the project in a deliberately broken-until-configured state plus a `.sandcastle/SETUP_ISSUE_TRACKER.md` prompt you feed to your coding agent, which wires up your own tracker by editing the scaffolded files in place. Five templates are available:
+`sandcastle init` prompts you to choose project profiles, a sandbox provider (Docker or Podman), an issue tracker (GitHub Issues, Beads, or Custom), and a template, which scaffolds a ready-to-use prompt and `main.mts` suited to a specific workflow. If your project's `package.json` has `"type": "module"`, the file will be named `main.ts` instead. Choosing **Custom** scaffolds the project in a deliberately broken-until-configured state plus a `.sandcastle/SETUP_ISSUE_TRACKER.md` prompt you feed to your coding agent, which wires up your own tracker by editing the scaffolded files in place. Five templates are available:
 
 | Template                       | Description                                                               |
 | ------------------------------ | ------------------------------------------------------------------------- |
@@ -718,6 +718,7 @@ Every interactive prompt has a paired `--flag` so the entire init can run non-in
 | `--image-name`            | No       | `sandcastle:<repo-dir-name>` | Docker image name                                                                                                                                                                  |
 | `--agent`                 | No       | Interactive multi-select     | One or more agents, comma-separated (e.g. `claude-code,codex`). The first is the generated `agent()` default. Valid: `claude-code`, `pi`, `codex`, `cursor`, `opencode`, `copilot` |
 | `--model`                 | No       | Agent's default model        | Pre-fills `AGENT_MODEL` in `.env.example` (e.g. `claude-sonnet-4-6`). Left commented out when unset                                                                                |
+| `--profile`               | No       | Interactive multi-select     | One or more project profiles, comma-separated (e.g. `js-ts,go`). Non-interactive init defaults to `js-ts` when unset. Valid: `js-ts`, `flutter`, `dart`, `go`                      |
 | `--sandbox`               | No       | Interactive prompt           | Sandbox provider to use (`docker`, `podman`)                                                                                                                                       |
 | `--template`              | No       | Interactive prompt           | Template to scaffold (e.g. `blank`, `simple-loop`)                                                                                                                                 |
 | `--issue-tracker`         | No       | Interactive prompt           | Issue tracker to use (`github-issues`, `beads`, `custom`)                                                                                                                          |
@@ -731,6 +732,7 @@ Creates the following files:
 .sandcastle/
 ├── Dockerfile      # Sandbox environment (customize as needed)
 ├── prompt.md       # Agent instructions
+├── profiles/       # Selected profile metadata and guidance
 ├── .env.example    # Token placeholders
 └── .gitignore      # Ignores .env, logs/
 ```

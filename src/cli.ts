@@ -21,6 +21,10 @@ import {
   getIssueTracker,
   listSandboxProviders,
   getSandboxProvider,
+  listProfiles,
+  getProfile,
+  resolveProfileEntries,
+  DEFAULT_PROFILE_NAME,
   getNextStepsLines,
   detectPackageManager,
   addDependencyCommand,
@@ -31,6 +35,7 @@ import { defaultImageName } from "./sandboxes/docker.js";
 import type {
   AgentEntry,
   IssueTrackerEntry,
+  ProfileEntry,
   SandboxProviderEntry,
 } from "./InitService.js";
 import { ConfigDirError, InitError } from "./errors.js";
@@ -114,6 +119,13 @@ const issueTrackerOption = Options.text("issue-tracker").pipe(
   Options.optional,
 );
 
+const profileOption = Options.text("profile").pipe(
+  Options.withDescription(
+    "Comma-separated project profiles to scaffold (e.g. js-ts,go)",
+  ),
+  Options.optional,
+);
+
 // Tri-state booleans (Some(true) / Some(false) / None) so we can tell "user
 // chose false" from "user didn't pass the flag at all" — only the latter
 // triggers the interactive prompt.
@@ -153,6 +165,34 @@ const choiceToTriBool = (
 ): Option.Option<boolean> =>
   opt._tag === "Some" ? Option.some(opt.value === "true") : Option.none();
 
+const parseCommaSeparatedNames = (value: string): string[] =>
+  value
+    .split(",")
+    .map((n) => n.trim())
+    .filter((n) => n.length > 0);
+
+export const resolveProfileFlagEntries = (value: string): ProfileEntry[] => {
+  const names = parseCommaSeparatedNames(value);
+  if (names.length === 0) {
+    throw new Error("--profile must name at least one profile.");
+  }
+  return resolveProfileEntries(names);
+};
+
+export const promptForProfiles = async (
+  profiles: readonly ProfileEntry[] = listProfiles(),
+): Promise<string[] | symbol> =>
+  clack.multiselect({
+    message: "Select one or more project profiles:",
+    initialValues: [DEFAULT_PROFILE_NAME],
+    required: true,
+    options: profiles.map((p) => ({
+      value: p.name,
+      label: p.label,
+      hint: p.validationCommands.join(", "),
+    })),
+  });
+
 const initCommand = Command.make(
   "init",
   {
@@ -162,6 +202,7 @@ const initCommand = Command.make(
     model: initModelOption,
     sandbox: sandboxOption,
     issueTracker: issueTrackerOption,
+    profile: profileOption,
     createLabel: createLabelOption,
     buildImage: buildImageOption,
     installTemplateDeps: installTemplateDepsOption,
@@ -173,6 +214,7 @@ const initCommand = Command.make(
     model: modelFlag,
     sandbox: sandboxFlag,
     issueTracker: issueTrackerFlag,
+    profile: profileFlag,
     createLabel: createLabelFlag,
     buildImage: buildImageFlag,
     installTemplateDeps: installTemplateDepsFlag,
@@ -219,6 +261,18 @@ const initCommand = Command.make(
           yield* Effect.fail(
             new InitError({
               message: `Unknown issue tracker "${issueTrackerFlag.value}". Available: ${names}`,
+            }),
+          );
+        }
+      }
+
+      if (profileFlag._tag === "Some") {
+        try {
+          resolveProfileFlagEntries(profileFlag.value);
+        } catch (e) {
+          yield* Effect.fail(
+            new InitError({
+              message: `${e instanceof Error ? e.message : e}`,
             }),
           );
         }
@@ -329,6 +383,27 @@ const initCommand = Command.make(
       // .env.example. Unset leaves AGENT_MODEL commented (per-agent default).
       const modelOverride =
         modelFlag._tag === "Some" ? modelFlag.value : undefined;
+
+      // Resolve profiles: CLI flag (comma-separated) > interactive multi-select
+      // > non-interactive default. The scaffold layer also defaults, but doing
+      // it here keeps CLI behavior explicit and testable.
+      const profiles = listProfiles();
+      let selectedProfiles: ProfileEntry[];
+      if (profileFlag._tag === "Some") {
+        selectedProfiles = resolveProfileFlagEntries(profileFlag.value);
+      } else if (isInteractive) {
+        const selected = yield* Effect.promise(() =>
+          promptForProfiles(profiles),
+        );
+        if (clack.isCancel(selected)) {
+          yield* Effect.fail(
+            new InitError({ message: "Profile selection cancelled." }),
+          );
+        }
+        selectedProfiles = (selected as string[]).map((n) => getProfile(n)!);
+      } else {
+        selectedProfiles = resolveProfileEntries([]);
+      }
 
       // Resolve sandbox provider: CLI flag > interactive select (no default — user must choose)
       const sandboxProviders = listSandboxProviders();
@@ -447,6 +522,7 @@ const initCommand = Command.make(
           createLabel: shouldCreateLabel,
           issueTracker: selectedIssueTracker,
           sandboxProvider: selectedSandboxProvider,
+          profiles: selectedProfiles,
         }).pipe(
           Effect.mapError(
             (e) =>
