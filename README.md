@@ -909,7 +909,7 @@ await run({
 });
 ```
 
-`sandcastle init` scaffolds this shape from the agent selection step. In the interactive flow, choose one or more agents with the multi-select prompt; non-interactive init can pass a comma-separated `--agent claude-code,codex` value. The first selected agent becomes the generated `agent({ default })` provider. Passing `--model` pre-fills `AGENT_MODEL` in `.env.example`, and users can later switch providers by setting `AGENT` without editing the generated script.
+`sandcastle init` scaffolds this shape from the agent selection step. In the interactive flow, choose one or more agents with the multi-select prompt; non-interactive init can pass a comma-separated `--agent claude-code,codex` value. The first selected agent becomes the generated `agent({ default })` provider. Passing `--model` pre-fills `AGENT_MODEL` in `.env.example`, and users can later switch among the selected, installed providers by setting `AGENT` without editing the generated script.
 
 ### `ClaudeCodeOptions`
 
