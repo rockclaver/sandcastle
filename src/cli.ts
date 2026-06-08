@@ -25,6 +25,8 @@ import {
   getProfile,
   resolveProfileEntries,
   DEFAULT_PROFILE_NAME,
+  detectRepositoryProfiles,
+  getProfileMismatchWarning,
   getNextStepsLines,
   detectPackageManager,
   addDependencyCommand,
@@ -403,6 +405,15 @@ const initCommand = Command.make(
         selectedProfiles = (selected as string[]).map((n) => getProfile(n)!);
       } else {
         selectedProfiles = resolveProfileEntries([]);
+      }
+
+      const repositoryProfileDetection = yield* detectRepositoryProfiles(cwd);
+      const profileMismatchWarning = getProfileMismatchWarning(
+        selectedProfiles,
+        repositoryProfileDetection,
+      );
+      if (profileMismatchWarning) {
+        yield* d.status(profileMismatchWarning, "warn");
       }
 
       // Resolve sandbox provider: CLI flag > interactive select (no default — user must choose)

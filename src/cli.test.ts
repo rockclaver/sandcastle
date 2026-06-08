@@ -330,6 +330,38 @@ describe("sandcastle CLI", () => {
     expect(goGuidance).toContain("go test ./...");
   });
 
+  it("AC: matching selected profiles produce no mismatch warning during init", async () => {
+    const hostDir = await mkdtemp(join(tmpdir(), "cli-host-"));
+    await initRepo(hostDir);
+    await commitFile(hostDir, "package.json", "{}\n", "add package json");
+
+    const { stdout, stderr } = await runCli(
+      "init --profile js-ts --agent claude-code --template blank --sandbox docker --issue-tracker beads --build-image false",
+      hostDir,
+    );
+
+    expect(stdout + stderr).not.toContain(
+      "did not match detected repository profile",
+    );
+    await expect(readProfileNames(hostDir)).resolves.toEqual(["js-ts"]);
+  });
+
+  it("AC: mismatching selected profiles print warning-only feedback and continue scaffolding", async () => {
+    const hostDir = await mkdtemp(join(tmpdir(), "cli-host-"));
+    await initRepo(hostDir);
+    await commitFile(hostDir, "package.json", "{}\n", "add package json");
+
+    const { stdout, stderr } = await runCli(
+      "init --profile go --agent claude-code --template blank --sandbox docker --issue-tracker beads --build-image false",
+      hostDir,
+    );
+
+    const output = stdout + stderr;
+    expect(output).toContain("did not match detected repository profile");
+    expect(output).toContain("Continuing");
+    await expect(readProfileNames(hostDir)).resolves.toEqual(["go"]);
+  });
+
   it("init without --agent fails fast with a clear non-interactive error message", async () => {
     const hostDir = await mkdtemp(join(tmpdir(), "cli-host-"));
     await initRepo(hostDir);

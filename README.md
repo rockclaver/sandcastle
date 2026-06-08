@@ -713,6 +713,8 @@ Init detects your host package manager (npm, pnpm, yarn, or bun) from a `package
 
 Every interactive prompt has a paired `--flag` so the entire init can run non-interactively (e.g. in CI or a scripted setup). When stdin is not a TTY and a required flag is missing, init fails fast with a clear error rather than wedging on a prompt.
 
+Init checks common repository signals against selected profiles and prints warning-only feedback when they do not appear to match. For example, selecting `--profile go` in a repo with only `package.json` warns but still scaffolds, so monorepos and custom layouts can continue.
+
 | Option                    | Required | Default                      | Description                                                                                                                                                                        |
 | ------------------------- | -------- | ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `--image-name`            | No       | `sandcastle:<repo-dir-name>` | Docker image name                                                                                                                                                                  |
