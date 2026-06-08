@@ -172,6 +172,10 @@ _Avoid_: ".sandcastle folder", "sandcastle dir"
 A pluggable source of **tasks** for the **agent**, selected during **init** (e.g. GitHub Issues, Beads). Used loosely -- Beads is a dependency-aware task tracker rather than a literal issue tracker, but "issue tracker" is the umbrella term.
 _Avoid_: "backlog manager" (retired name), "task source"
 
+**Profile**:
+A language/stack entry in Sandcastle's internal profile registry (e.g. `js-ts`, `flutter`, `dart`, `go`), selected during **init**. A profile supplies stack-specific guidance and suggested setup/validation commands scaffolded into the **config directory**; it does not install, pin, or manage any SDK.
+_Avoid_: "language pack", "preset", "stack config" (profiles are not user-defined config in v1)
+
 **Template argument**:
 A named `{{KEY}}` placeholder in a scaffold template (Dockerfile, prompt `.md` file) that **init** replaces with a value derived from the user's choices.
 _Avoid_: "placeholder", "variable"
