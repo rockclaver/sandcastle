@@ -76,6 +76,10 @@ _Avoid_: "base branch", "destination branch", "merge target"
 A pluggable implementation that builds commands and parses output for a specific **agent**, injected into `run()` via the `agent` option.
 _Avoid_: "agent adapter", "agent driver"
 
+**Runtime agent resolver**:
+The `agent()` helper that selects an **agent provider** at runtime from `AGENT` and `AGENT_MODEL`.
+_Avoid_: "agent provider" (the resolver chooses providers; it is not itself one concrete provider)
+
 ### Execution
 
 **Agent invoker**:

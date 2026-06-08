@@ -893,11 +893,9 @@ const [reviewA, reviewB] = await Promise.all([
 
 `fork` is present only on results from providers with `sessionStorage` (Claude Code, Codex) — hence the optional-chaining call. The same single-iteration and session-file constraints as `.resume()` apply.
 
-### `ClaudeCodeOptions`
+### Agent selection
 
-Use `agent()` to choose a provider at runtime from `AGENT` and `AGENT_MODEL`.
-`AGENT` selects the provider, `AGENT_MODEL` overrides that provider's default
-model, and `default` is used when `AGENT` is unset:
+Use `agent()` when the provider should be selected at runtime rather than hard-coded in `main.ts`. The resolver reads `AGENT` to choose a provider, reads `AGENT_MODEL` to override that provider's default model, and falls back to `default` when `AGENT` is unset:
 
 ```typescript
 import { agent, run } from "@ai-hero/sandcastle";
@@ -910,6 +908,10 @@ await run({
   prompt: "Fix issue #42",
 });
 ```
+
+`sandcastle init` scaffolds this shape from the agent selection step. In the interactive flow, choose one or more agents with the multi-select prompt; non-interactive init can pass a comma-separated `--agent claude-code,codex` value. The first selected agent becomes the generated `agent({ default })` provider. Passing `--model` pre-fills `AGENT_MODEL` in `.env.example`, and users can later switch providers by setting `AGENT` without editing the generated script.
+
+### `ClaudeCodeOptions`
 
 The `claudeCode()` factory accepts an optional second argument for provider-specific options:
 
