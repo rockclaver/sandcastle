@@ -584,6 +584,96 @@ export const getSandboxProvider = (
   SANDBOX_PROVIDER_REGISTRY.find((p) => p.name === name);
 
 // ---------------------------------------------------------------------------
+// Profile registry (internal — not part of public API)
+// ---------------------------------------------------------------------------
+
+/**
+ * A language/stack profile. Profiles supply stack-specific guidance and
+ * suggested validation commands that are scaffolded into `.sandcastle/`. They
+ * do not install, pin, or manage any SDK — a profile is guidance only.
+ */
+export interface ProfileEntry {
+  readonly name: string;
+  readonly label: string;
+  /** Short prose describing the stack and how the agent should treat it. */
+  readonly guidance: string;
+  /** Suggested validation commands the agent should run for this stack. */
+  readonly validationCommands: readonly string[];
+}
+
+/** The profile selected when none is explicitly provided to the scaffold layer. */
+export const DEFAULT_PROFILE_NAME = "js-ts";
+
+const PROFILE_REGISTRY: ProfileEntry[] = [
+  {
+    name: "js-ts",
+    label: "JavaScript / TypeScript",
+    guidance:
+      "JavaScript or TypeScript project managed with npm, pnpm, yarn, or bun. Install dependencies before validating, and prefer the project's existing scripts (typecheck, lint, test) over ad-hoc commands.",
+    validationCommands: [
+      "npm install",
+      "npm run typecheck",
+      "npm run lint",
+      "npm test",
+    ],
+  },
+  {
+    name: "flutter",
+    label: "Flutter",
+    guidance:
+      "Flutter application using the Dart SDK. Fetch packages with `flutter pub get`, then analyze and test through the Flutter toolchain. Sandcastle does not install or pin the Flutter SDK — assume it is available in the sandbox.",
+    validationCommands: ["flutter pub get", "flutter analyze", "flutter test"],
+  },
+  {
+    name: "dart",
+    label: "Dart",
+    guidance:
+      "Standalone Dart package (no Flutter). Fetch packages with `dart pub get`, then analyze and test with the Dart toolchain. Sandcastle does not install or pin the Dart SDK — assume it is available in the sandbox.",
+    validationCommands: ["dart pub get", "dart analyze", "dart test"],
+  },
+  {
+    name: "go",
+    label: "Go",
+    guidance:
+      "Go module defined by `go.mod`. Build, vet, and test through the Go toolchain. Sandcastle does not install or pin the Go SDK — assume it is available in the sandbox.",
+    validationCommands: ["go build ./...", "go vet ./...", "go test ./..."],
+  },
+];
+
+export const listProfiles = (): ProfileEntry[] => PROFILE_REGISTRY;
+
+export const getProfile = (name: string): ProfileEntry | undefined =>
+  PROFILE_REGISTRY.find((p) => p.name === name);
+
+/**
+ * Resolve selected profile names to their registry entries. An empty selection
+ * falls back to the default `js-ts` profile. Duplicate names are de-duplicated
+ * while preserving first-occurrence order. An unknown name throws an error that
+ * lists the available profiles.
+ */
+export const resolveProfileEntries = (
+  profileNames: readonly string[],
+): ProfileEntry[] => {
+  const names =
+    profileNames.length === 0 ? [DEFAULT_PROFILE_NAME] : profileNames;
+  const seen = new Set<string>();
+  const resolved: ProfileEntry[] = [];
+  for (const name of names) {
+    if (seen.has(name)) continue;
+    const entry = PROFILE_REGISTRY.find((p) => p.name === name);
+    if (!entry) {
+      const valid = PROFILE_REGISTRY.map((p) => p.name).join(", ");
+      throw new Error(
+        `Unknown profile "${name}". Available profiles: ${valid}`,
+      );
+    }
+    seen.add(name);
+    resolved.push(entry);
+  }
+  return resolved;
+};
+
+// ---------------------------------------------------------------------------
 // Next steps
 // ---------------------------------------------------------------------------
 
@@ -922,6 +1012,81 @@ Run your **list** command inside the built image and confirm it returns the open
 `;
 
 // ---------------------------------------------------------------------------
+// Profile scaffolding
+// ---------------------------------------------------------------------------
+
+/** Subdirectory of `.sandcastle/` holding generated profile guidance + metadata. */
+const PROFILES_DIR = "profiles";
+/** Generated metadata file (relative to `.sandcastle/`) listing selected profiles. */
+const PROFILES_METADATA_FILE = `${PROFILES_DIR}/profiles.json`;
+
+/** Path (relative to `.sandcastle/`) of the guidance markdown for a profile. */
+const profileGuidancePath = (profileName: string): string =>
+  `${PROFILES_DIR}/${profileName}.md`;
+
+/** Build the guidance markdown scaffolded for a single profile. */
+const buildProfileGuidanceDoc = (profile: ProfileEntry): string => {
+  const commands = profile.validationCommands
+    .map((c) => `- \`${c}\``)
+    .join("\n");
+  return `# ${profile.label} profile
+
+${profile.guidance}
+
+## Suggested validation commands
+
+${commands}
+
+> These commands are guidance, not a contract. Sandcastle does not install or pin the SDK for this profile — adapt them to the project's actual scripts and tooling.
+`;
+};
+
+/**
+ * Write generated profile guidance markdown plus a `profiles.json` metadata file
+ * into `.sandcastle/${PROFILES_DIR}/`. Templates can reference the metadata to
+ * discover which profiles were selected and where their guidance lives.
+ */
+const scaffoldProfiles = (
+  configDir: string,
+  profiles: readonly ProfileEntry[],
+): Effect.Effect<void, Error, FileSystem.FileSystem> =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const profilesDir = join(configDir, PROFILES_DIR);
+    yield* fs
+      .makeDirectory(profilesDir, { recursive: true })
+      .pipe(Effect.mapError((e) => new Error(e.message)));
+
+    const metadata = {
+      profiles: profiles.map((p) => ({
+        name: p.name,
+        label: p.label,
+        guidance: profileGuidancePath(p.name),
+      })),
+    };
+
+    yield* Effect.all(
+      [
+        fs
+          .writeFileString(
+            join(configDir, PROFILES_METADATA_FILE),
+            JSON.stringify(metadata, null, 2) + "\n",
+          )
+          .pipe(Effect.mapError((e) => new Error(e.message))),
+        ...profiles.map((profile) =>
+          fs
+            .writeFileString(
+              join(configDir, profileGuidancePath(profile.name)),
+              buildProfileGuidanceDoc(profile),
+            )
+            .pipe(Effect.mapError((e) => new Error(e.message))),
+        ),
+      ],
+      { concurrency: "unbounded" },
+    );
+  });
+
+// ---------------------------------------------------------------------------
 // Main scaffold function
 // ---------------------------------------------------------------------------
 
@@ -934,6 +1099,11 @@ export interface ScaffoldOptions {
   createLabel?: boolean;
   issueTracker?: IssueTrackerEntry;
   sandboxProvider?: SandboxProviderEntry;
+  /**
+   * Selected language/stack profiles. Defaults to the `js-ts` profile when
+   * omitted or empty, so existing JS/TS scaffolds keep their current behavior.
+   */
+  profiles?: readonly ProfileEntry[];
 }
 
 export interface ScaffoldResult {
@@ -977,7 +1147,12 @@ export const scaffold = (
       createLabel = true,
       issueTracker = ISSUE_TRACKER_REGISTRY[0]!, // default: github-issues
       sandboxProvider = SANDBOX_PROVIDER_REGISTRY[0]!, // default: docker
+      profiles,
     } = options;
+    // Empty/omitted selection routes through the explicit js-ts default.
+    const selectedProfiles = resolveProfileEntries(
+      (profiles ?? []).map((p) => p.name),
+    );
     if (agents.length === 0) {
       yield* Effect.fail(new Error("At least one agent must be selected."));
     }
@@ -1062,6 +1237,9 @@ export const scaffold = (
         )
         .pipe(Effect.mapError((e) => new Error(e.message)));
     }
+
+    // Generate profile guidance + metadata into .sandcastle/profiles/.
+    yield* scaffoldProfiles(configDir, selectedProfiles);
 
     return { mainFilename };
   });
