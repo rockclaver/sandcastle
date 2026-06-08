@@ -920,6 +920,21 @@ ${entries}
 };
 
 /**
+ * Build the `onSandboxReady` setup command for a non-JS profile. Sandcastle does
+ * not install the Flutter/Dart/Go SDK into the scaffolded image, so the command
+ * runs the profile's setup only when the toolchain is present and otherwise
+ * prints a pointer to the guidance + Dockerfile — never hard-failing the run.
+ */
+const buildProfileSetupHookCommand = (
+  profile: ProfileEntry,
+  setupCommand: string,
+): string => {
+  const bin = setupCommand.split(" ")[0];
+  const guidance = `.sandcastle/${profileGuidancePath(profile.name)}`;
+  return `command -v ${bin} >/dev/null 2>&1 && ${setupCommand} || echo 'Sandcastle: ${bin} not found in sandbox — add it to .sandcastle/Dockerfile (see ${guidance})'`;
+};
+
+/**
  * Rewrite scaffolded prompt files and the main entrypoint so they reference the
  * selected profile guidance rather than baking in npm-only assumptions:
  *
@@ -927,7 +942,8 @@ ${entries}
  *   `.sandcastle/profiles/*.md` guidance, and its hard-coded npm verify phrase
  *   is replaced with a pointer to that guidance.
  * - When no JS/TS profile is selected, the npm-only `main` setup hook is
- *   rewritten to the primary selected profile's setup command.
+ *   rewritten to a guarded command that runs the primary profile's setup only
+ *   when its toolchain is present (the scaffolded image ships no SDK).
  */
 const rewriteProfileReferences = (
   configDir: string,
@@ -962,10 +978,15 @@ const rewriteProfileReferences = (
       { concurrency: "unbounded" },
     );
 
-    // Replace the npm-only setup hook in main when no JS/TS profile is selected.
+    // Rewrite the npm-only setup hook in main when no JS/TS profile is selected.
+    // The scaffolded image does NOT install Flutter/Dart/Go SDKs (profiles are
+    // guidance only), so the hook must not hard-fail with `<tool>: not found`.
+    // It runs the profile's setup command only if the toolchain is present, and
+    // otherwise prints a pointer to the guidance + Dockerfile.
     const hasJsProfile = profiles.some((p) => p.name === DEFAULT_PROFILE_NAME);
-    if (!hasJsProfile) {
-      const setupCommand = profiles[0]?.setupCommands[0] ?? "npm install";
+    const primary = profiles[0];
+    const setupCommand = primary?.setupCommands[0];
+    if (!hasJsProfile && primary && setupCommand) {
       const mainPath = join(configDir, mainFilename);
       const mainExists = yield* fs
         .exists(mainPath)
@@ -974,7 +995,10 @@ const rewriteProfileReferences = (
         const mainContent = yield* fs
           .readFileString(mainPath)
           .pipe(Effect.mapError((e) => new Error(e.message)));
-        const rewritten = mainContent.replace(/npm install/g, setupCommand);
+        const rewritten = mainContent.replace(
+          /command: "npm install"/g,
+          `command: ${JSON.stringify(buildProfileSetupHookCommand(primary, setupCommand))}`,
+        );
         if (rewritten !== mainContent) {
           yield* fs
             .writeFileString(mainPath, rewritten)

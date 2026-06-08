@@ -193,7 +193,7 @@ describe("Profile-aware template output", () => {
 
   // AC (issue #11): Generated main setup defaults avoid hard-coded JS-only
   // setup assumptions when non-JS profiles are selected.
-  it("AC: go-only scaffold main avoids npm-only setup hook", async () => {
+  it("AC: go-only scaffold main drops the npm-only setup hook command", async () => {
     const dir = await makeDir();
     await runScaffold(dir, {
       templateName: "simple-loop",
@@ -201,8 +201,25 @@ describe("Profile-aware template output", () => {
     });
 
     const main = await readFile(join(dir, ".sandcastle", "main.mts"), "utf-8");
-    expect(main).not.toContain("npm install");
+    // The executed hook command is no longer `npm install`.
+    expect(main).not.toContain('command: "npm install"');
     expect(main).toContain("go mod download");
+  });
+
+  // Codex review (PR #15): the scaffolded image ships no Go/Flutter/Dart SDK, so
+  // the hook must verify the toolchain before running and never hard-fail.
+  it("AC: non-JS setup hook is guarded so it never hard-fails when the SDK is absent", async () => {
+    const dir = await makeDir();
+    await runScaffold(dir, {
+      templateName: "simple-loop",
+      profiles: profilesFor("go"),
+    });
+
+    const main = await readFile(join(dir, ".sandcastle", "main.mts"), "utf-8");
+    // Presence check + graceful fallback rather than an unconditional run.
+    expect(main).toContain("command -v go >/dev/null 2>&1 && go mod download");
+    expect(main).toContain("not found in sandbox");
+    expect(main).toContain(".sandcastle/profiles/go.md");
   });
 
   it("AC: js-ts scaffold main keeps the npm setup hook", async () => {
@@ -210,7 +227,7 @@ describe("Profile-aware template output", () => {
     await runScaffold(dir, { templateName: "simple-loop" });
 
     const main = await readFile(join(dir, ".sandcastle", "main.mts"), "utf-8");
-    expect(main).toContain("npm install");
+    expect(main).toContain('command: "npm install"');
   });
 
   it("AC: flutter+go scaffold main uses the primary (first) profile setup command", async () => {
@@ -221,8 +238,10 @@ describe("Profile-aware template output", () => {
     });
 
     const main = await readFile(join(dir, ".sandcastle", "main.mts"), "utf-8");
-    expect(main).not.toContain("npm install");
-    expect(main).toContain("flutter pub get");
+    expect(main).not.toContain('command: "npm install"');
+    expect(main).toContain(
+      "command -v flutter >/dev/null 2>&1 && flutter pub get",
+    );
   });
 
   // AC (issue #11): Selecting `flutter` scaffolds Flutter-aware guidance and
