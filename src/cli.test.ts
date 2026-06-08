@@ -1,5 +1,5 @@
 import { exec } from "node:child_process";
-import { mkdtemp, readdir, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -28,6 +28,17 @@ const cliPath = join(import.meta.dirname, "..", "dist", "main.js");
 
 const runCli = (args: string, cwd: string) =>
   execAsync(`node ${cliPath} ${args}`, { cwd });
+
+const readProfileNames = async (dir: string): Promise<string[]> => {
+  const content = await readFile(
+    join(dir, ".sandcastle", "profiles", "profiles.json"),
+    "utf-8",
+  );
+  const metadata = JSON.parse(content) as {
+    profiles: Array<{ name: string }>;
+  };
+  return metadata.profiles.map((p) => p.name);
+};
 
 describe("sandcastle CLI", () => {
   it("shows help with --help flag", async () => {
@@ -208,6 +219,12 @@ describe("sandcastle CLI", () => {
     expect(stdout).toContain("--install-template-deps");
   });
 
+  it("AC: init --help documents --profile", async () => {
+    const { stdout } = await runCli("init --help", process.cwd());
+    expect(stdout).toContain("--profile");
+    expect(stdout).toContain("project profiles");
+  });
+
   it("init --issue-tracker nonexistent produces error listing available trackers", async () => {
     const hostDir = await mkdtemp(join(tmpdir(), "cli-host-"));
     await initRepo(hostDir);
@@ -241,6 +258,76 @@ describe("sandcastle CLI", () => {
     const entries = await readdir(join(hostDir, ".sandcastle"));
     expect(entries).toContain("Dockerfile");
     expect(entries).toContain("prompt.md");
+  });
+
+  it("AC: non-interactive init without --profile falls back to js-ts", async () => {
+    const hostDir = await mkdtemp(join(tmpdir(), "cli-host-"));
+    await initRepo(hostDir);
+    await commitFile(hostDir, "hello.txt", "hello", "initial commit");
+
+    await runCli(
+      "init --agent claude-code --template blank --sandbox docker --issue-tracker beads --build-image false",
+      hostDir,
+    );
+
+    await expect(readProfileNames(hostDir)).resolves.toEqual(["js-ts"]);
+  });
+
+  it("AC: --profile js-ts,go selects both profiles and de-duplicates in first-occurrence order", async () => {
+    const hostDir = await mkdtemp(join(tmpdir(), "cli-host-"));
+    await initRepo(hostDir);
+    await commitFile(hostDir, "hello.txt", "hello", "initial commit");
+
+    await runCli(
+      "init --profile js-ts,go,js-ts --agent claude-code --template blank --sandbox docker --issue-tracker beads --build-image false",
+      hostDir,
+    );
+
+    await expect(readProfileNames(hostDir)).resolves.toEqual(["js-ts", "go"]);
+  });
+
+  it("AC: unknown --profile fails early and lists available profiles", async () => {
+    const hostDir = await mkdtemp(join(tmpdir(), "cli-host-"));
+    await initRepo(hostDir);
+
+    try {
+      await runCli(
+        "init --profile rust --agent claude-code --template blank --sandbox docker --issue-tracker beads --build-image false",
+        hostDir,
+      );
+      expect.fail("Expected command to fail");
+    } catch (err: unknown) {
+      const { stdout, stderr } = err as { stdout: string; stderr: string };
+      const output = stdout + stderr;
+      expect(output).toContain('Unknown profile "rust"');
+      expect(output).toContain("js-ts");
+      expect(output).toContain("flutter");
+      expect(output).toContain("dart");
+      expect(output).toContain("go");
+    }
+  });
+
+  it("AC: full non-interactive init with multiple profiles scaffolds Flutter and Go guidance end to end", async () => {
+    const hostDir = await mkdtemp(join(tmpdir(), "cli-host-"));
+    await initRepo(hostDir);
+    await commitFile(hostDir, "hello.txt", "hello", "initial commit");
+
+    await runCli(
+      "init --profile flutter,go --agent claude-code --template blank --sandbox docker --issue-tracker beads --build-image false",
+      hostDir,
+    );
+
+    await expect(readProfileNames(hostDir)).resolves.toEqual(["flutter", "go"]);
+    const flutterGuidance = await readFile(
+      join(hostDir, ".sandcastle", "profiles", "flutter.md"),
+      "utf-8",
+    );
+    const goGuidance = await readFile(
+      join(hostDir, ".sandcastle", "profiles", "go.md"),
+      "utf-8",
+    );
+    expect(flutterGuidance).toContain("flutter analyze");
+    expect(goGuidance).toContain("go test ./...");
   });
 
   it("init without --agent fails fast with a clear non-interactive error message", async () => {
