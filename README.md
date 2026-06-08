@@ -705,6 +705,8 @@ npx @rockclaver/sandcastle init --profile js-ts
 
 Profile names are de-duplicated while preserving first-occurrence order, and an unknown name fails fast with an error listing the valid profiles.
 
+**Repository detection (advisory).** During init, Sandcastle does a shallow scan for stack signals — `package.json`/lockfiles (`js-ts`), `pubspec.yaml` (`flutter` or `dart`), and `go.mod` (`go`) — at the repo root **and** in any paths declared in `.gitmodules`, so signals living in a git submodule are still picked up. If your selected profiles don't match what was detected, init prints a warning and **continues anyway** — monorepos and custom layouts are valid, so detection never blocks scaffolding. It does not perform a full-tree walk, so signals nested in undeclared subdirectories won't be detected and may trigger an advisory mismatch warning.
+
 **Generated guidance files.** Each selected profile scaffolds a guidance markdown file plus a metadata file under `.sandcastle/profiles/`:
 
 ```

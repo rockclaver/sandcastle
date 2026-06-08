@@ -112,6 +112,47 @@ dependencies:
     await expect(detectNames(dir)).resolves.toEqual(["flutter", "go"]);
   });
 
+  it("detects Go signals living in a git submodule declared in .gitmodules", async () => {
+    const dir = await makeDir();
+    await writeFixture(
+      dir,
+      ".gitmodules",
+      `[submodule "backend"]
+\tpath = backend
+\turl = ../backend.git
+`,
+    );
+    await writeFixture(dir, "backend/go.mod", "module example.com/backend\n");
+
+    await expect(detectNames(dir)).resolves.toEqual(["go"]);
+  });
+
+  it("combines a root JS signal with a Go signal from a submodule", async () => {
+    const dir = await makeDir();
+    await writeFixture(dir, "package.json", "{}\n");
+    await writeFixture(
+      dir,
+      ".gitmodules",
+      `[submodule "services/api"]
+\tpath = services/api
+\turl = ../api.git
+`,
+    );
+    await writeFixture(dir, "services/api/go.mod", "module example.com/api\n");
+
+    await expect(detectNames(dir)).resolves.toEqual(["js-ts", "go"]);
+  });
+
+  it("does not deep-scan undeclared subdirectories for signals", async () => {
+    const dir = await makeDir();
+    await writeFixture(dir, "package.json", "{}\n");
+    // go.mod in a plain subdirectory (no .gitmodules entry) is intentionally
+    // ignored — detection only descends into declared submodule paths.
+    await writeFixture(dir, "vendored/go.mod", "module example.com/vendored\n");
+
+    await expect(detectNames(dir)).resolves.toEqual(["js-ts"]);
+  });
+
   it("AC: matching selected profiles produce no mismatch warning", () => {
     expect(
       getProfileMismatchWarning(

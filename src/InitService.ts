@@ -721,41 +721,73 @@ const readOptionalFile = (
 const hasFlutterMarkers = (pubspec: string): boolean =>
   /^\s*sdk:\s*flutter\s*$/m.test(pubspec) || /^flutter:\s*$/m.test(pubspec);
 
+/** Parse submodule paths (relative to the repo root) from a `.gitmodules` file. */
+const parseSubmodulePaths = (gitmodules: string): string[] => {
+  const paths: string[] = [];
+  for (const line of gitmodules.split("\n")) {
+    const match = /^\s*path\s*=\s*(.+?)\s*$/.exec(line);
+    if (match?.[1]) paths.push(match[1]);
+  }
+  return paths;
+};
+
+/** Detect the profiles signalled by a single directory's root-level files. */
+const detectProfilesInDir = (
+  dir: string,
+): Effect.Effect<string[], never, FileSystem.FileSystem> =>
+  Effect.gen(function* () {
+    const names: string[] = [];
+
+    const hasJsSignal =
+      (yield* hasFile(dir, "package.json")) ||
+      (yield* Effect.all(
+        LOCKFILES.map(([file]) => hasFile(dir, file)),
+        { concurrency: "unbounded" },
+      )).some(Boolean);
+    if (hasJsSignal) names.push("js-ts");
+
+    const pubspec = yield* readOptionalFile(dir, "pubspec.yaml");
+    if (pubspec !== undefined) {
+      names.push(hasFlutterMarkers(pubspec) ? "flutter" : "dart");
+    }
+
+    if (yield* hasFile(dir, "go.mod")) names.push("go");
+
+    return names;
+  });
+
 /**
- * Detect likely project profiles from common root-level repository signals.
- * This is intentionally conservative: absence of signals produces an empty
- * result so custom layouts and monorepos can proceed without noisy feedback.
+ * Detect likely project profiles from common repository signals. Scans the repo
+ * root plus any paths declared in `.gitmodules`, so signals that live in a git
+ * submodule (e.g. a Go service vendored as a submodule) are still detected.
+ *
+ * Detection stays intentionally shallow — it checks each directory's root-level
+ * files, not a full-tree walk — so absence of signals produces an empty result
+ * and custom layouts/monorepos proceed without noisy feedback.
  */
 export const detectRepositoryProfiles = (
   repoDir: string,
 ): Effect.Effect<RepositoryProfileDetection, never, FileSystem.FileSystem> =>
   Effect.gen(function* () {
-    const detected: ProfileEntry[] = [];
+    const gitmodules = yield* readOptionalFile(repoDir, ".gitmodules");
+    const submodulePaths =
+      gitmodules === undefined ? [] : parseSubmodulePaths(gitmodules);
+    const searchDirs = [
+      repoDir,
+      ...submodulePaths.map((p) => join(repoDir, p)),
+    ];
 
-    const hasJsSignal =
-      (yield* hasFile(repoDir, "package.json")) ||
-      (yield* Effect.all(
-        LOCKFILES.map(([file]) => hasFile(repoDir, file)),
-        {
-          concurrency: "unbounded",
-        },
-      )).some(Boolean);
-    if (hasJsSignal) {
-      detected.push(getProfile("js-ts")!);
+    const found = new Set<string>();
+    for (const dir of searchDirs) {
+      for (const name of yield* detectProfilesInDir(dir)) {
+        found.add(name);
+      }
     }
 
-    const pubspec = yield* readOptionalFile(repoDir, "pubspec.yaml");
-    if (pubspec !== undefined) {
-      detected.push(
-        getProfile(hasFlutterMarkers(pubspec) ? "flutter" : "dart")!,
-      );
-    }
-
-    if (yield* hasFile(repoDir, "go.mod")) {
-      detected.push(getProfile("go")!);
-    }
-
-    return { profiles: detected };
+    // Emit in registry order so the detected list (and the mismatch warning) is
+    // stable regardless of which directory each signal came from.
+    const profiles = listProfiles().filter((p) => found.has(p.name));
+    return { profiles };
   });
 
 export const getProfileMismatchWarning = (
