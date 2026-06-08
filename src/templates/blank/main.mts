@@ -1,5 +1,5 @@
-import { run, agent } from "@ai-hero/sandcastle";
-import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
+import { run, agent } from "@rockclaver/sandcastle";
+import { docker } from "@rockclaver/sandcastle/sandboxes/docker";
 
 // Blank template: customize this to build your own orchestration.
 // Run this with: npx tsx .sandcastle/main.mts
