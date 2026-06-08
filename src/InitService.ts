@@ -684,6 +684,97 @@ export const resolveProfileEntries = (
 };
 
 // ---------------------------------------------------------------------------
+// Repository profile detection (internal — not part of public API)
+// ---------------------------------------------------------------------------
+
+export interface RepositoryProfileDetection {
+  readonly profiles: readonly ProfileEntry[];
+}
+
+const hasFile = (
+  repoDir: string,
+  file: string,
+): Effect.Effect<boolean, never, FileSystem.FileSystem> =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    return yield* fs
+      .exists(join(repoDir, file))
+      .pipe(Effect.orElseSucceed(() => false));
+  });
+
+const readOptionalFile = (
+  repoDir: string,
+  file: string,
+): Effect.Effect<string | undefined, never, FileSystem.FileSystem> =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = join(repoDir, file);
+    const exists = yield* fs
+      .exists(path)
+      .pipe(Effect.orElseSucceed(() => false));
+    if (!exists) return undefined;
+    return yield* fs
+      .readFileString(path)
+      .pipe(Effect.orElseSucceed(() => undefined));
+  });
+
+const hasFlutterMarkers = (pubspec: string): boolean =>
+  /^\s*sdk:\s*flutter\s*$/m.test(pubspec) || /^flutter:\s*$/m.test(pubspec);
+
+/**
+ * Detect likely project profiles from common root-level repository signals.
+ * This is intentionally conservative: absence of signals produces an empty
+ * result so custom layouts and monorepos can proceed without noisy feedback.
+ */
+export const detectRepositoryProfiles = (
+  repoDir: string,
+): Effect.Effect<RepositoryProfileDetection, never, FileSystem.FileSystem> =>
+  Effect.gen(function* () {
+    const detected: ProfileEntry[] = [];
+
+    const hasJsSignal =
+      (yield* hasFile(repoDir, "package.json")) ||
+      (yield* Effect.all(
+        LOCKFILES.map(([file]) => hasFile(repoDir, file)),
+        {
+          concurrency: "unbounded",
+        },
+      )).some(Boolean);
+    if (hasJsSignal) {
+      detected.push(getProfile("js-ts")!);
+    }
+
+    const pubspec = yield* readOptionalFile(repoDir, "pubspec.yaml");
+    if (pubspec !== undefined) {
+      detected.push(
+        getProfile(hasFlutterMarkers(pubspec) ? "flutter" : "dart")!,
+      );
+    }
+
+    if (yield* hasFile(repoDir, "go.mod")) {
+      detected.push(getProfile("go")!);
+    }
+
+    return { profiles: detected };
+  });
+
+export const getProfileMismatchWarning = (
+  selectedProfiles: readonly ProfileEntry[],
+  detection: RepositoryProfileDetection,
+): string | undefined => {
+  if (detection.profiles.length === 0) return undefined;
+
+  const detectedNames = new Set(detection.profiles.map((p) => p.name));
+  const mismatches = selectedProfiles.filter((p) => !detectedNames.has(p.name));
+  if (mismatches.length === 0) return undefined;
+
+  const selected = selectedProfiles.map((p) => p.name).join(", ");
+  const detected = detection.profiles.map((p) => p.name).join(", ");
+  const mismatchNames = mismatches.map((p) => p.name).join(", ");
+  return `Selected profile${mismatches.length === 1 ? "" : "s"} ${mismatchNames} did not match detected repository profile${detection.profiles.length === 1 ? "" : "s"} (${detected}). Continuing because custom layouts and monorepos may still be valid. Selected: ${selected}.`;
+};
+
+// ---------------------------------------------------------------------------
 // Next steps
 // ---------------------------------------------------------------------------
 
