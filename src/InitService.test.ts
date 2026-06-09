@@ -2300,7 +2300,7 @@ describe("InitService scaffold", () => {
       expect(mainTs).toContain(
         'import { podman } from "@rockclaver/sandcastle/sandboxes/podman"',
       );
-      expect(mainTs).toContain("sandbox: podman()");
+      expect(mainTs).toContain("sandbox: podman({ mounts: codexAuthMounts })");
       expect(mainTs).not.toContain("docker");
     });
 
@@ -2317,7 +2317,9 @@ describe("InitService scaffold", () => {
       );
       expect(mainTs).not.toContain("docker");
       // parallel-planner calls the factory three times
-      expect(mainTs.match(/sandbox: podman\(\)/g)).toHaveLength(3);
+      expect(
+        mainTs.match(/sandbox: podman\(\{ mounts: codexAuthMounts \}\)/g),
+      ).toHaveLength(3);
     });
 
     it("selecting docker leaves the main file importing and calling docker", async () => {
@@ -2334,7 +2336,7 @@ describe("InitService scaffold", () => {
       expect(mainTs).toContain(
         'import { docker } from "@rockclaver/sandcastle/sandboxes/docker"',
       );
-      expect(mainTs).toContain("sandbox: docker()");
+      expect(mainTs).toContain("sandbox: docker({ mounts: codexAuthMounts })");
     });
   });
 });

@@ -21,8 +21,28 @@
 // Or add to package.json:
 //   "scripts": { "sandcastle": "npx tsx .sandcastle/main.mts" }
 
+import { existsSync } from "node:fs";
 import * as sandcastle from "@rockclaver/sandcastle";
 import { docker } from "@rockclaver/sandcastle/sandboxes/docker";
+
+// Load .sandcastle/.env into the host process so agent() can read AGENT /
+// AGENT_MODEL when selecting the provider. The env resolver only injects
+// these into the sandbox container, so without this the host-side agent()
+// call ignores AGENT and falls back to its baked-in default.
+if (existsSync(".sandcastle/.env")) process.loadEnvFile(".sandcastle/.env");
+
+// Resolve the agent once so we can both run it and detect codex below.
+const selectedAgent = sandcastle.agent({ default: "claude-code" });
+
+// Codex authenticates with the host's ~/.codex/auth.json (ChatGPT/Codex
+// subscription login). Bind-mount it into the sandbox so codex is logged in
+// inside the container. Empty for other agents. Note: one subscription token
+// shared across concurrent sandboxes can be invalidated by codex token
+// rotation — prefer an API key for heavily parallel runs.
+const codexAuthMounts =
+  selectedAgent.name === "codex"
+    ? [{ hostPath: "~/.codex/auth.json", sandboxPath: "~/.codex/auth.json" }]
+    : [];
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -57,7 +77,7 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
   // This gives both agents a real, named branch that persists across phases.
   const sandbox = await sandcastle.createSandbox({
     branch,
-    sandbox: docker(),
+    sandbox: docker({ mounts: codexAuthMounts }),
     hooks,
     copyToWorktree,
   });
@@ -79,7 +99,7 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
     const implement = await sandbox.run({
       name: "implementer",
       maxIterations: 1,
-      agent: sandcastle.agent({ default: "claude-code" }),
+      agent: selectedAgent,
       promptFile: "./.sandcastle/implement-prompt.md",
     });
 
@@ -103,7 +123,7 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
     await sandbox.run({
       name: "reviewer",
       maxIterations: 1,
-      agent: sandcastle.agent({ default: "claude-code" }),
+      agent: selectedAgent,
       promptFile: "./.sandcastle/review-prompt.md",
       promptArgs: {
         BRANCH: branch,

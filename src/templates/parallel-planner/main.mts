@@ -16,9 +16,29 @@
 // Or add to package.json:
 //   "scripts": { "sandcastle": "npx tsx .sandcastle/main.mts" }
 
+import { existsSync } from "node:fs";
 import * as sandcastle from "@rockclaver/sandcastle";
 import { docker } from "@rockclaver/sandcastle/sandboxes/docker";
 import { z } from "zod";
+
+// Load .sandcastle/.env into the host process so agent() can read AGENT /
+// AGENT_MODEL when selecting the provider. The env resolver only injects
+// these into the sandbox container, so without this the host-side agent()
+// call ignores AGENT and falls back to its baked-in default.
+if (existsSync(".sandcastle/.env")) process.loadEnvFile(".sandcastle/.env");
+
+// Resolve the agent once so we can both run it and detect codex below.
+const selectedAgent = sandcastle.agent({ default: "claude-code" });
+
+// Codex authenticates with the host's ~/.codex/auth.json (ChatGPT/Codex
+// subscription login). Bind-mount it into the sandbox so codex is logged in
+// inside the container. Empty for other agents. Note: one subscription token
+// shared across concurrent sandboxes can be invalidated by codex token
+// rotation — prefer an API key for heavily parallel runs.
+const codexAuthMounts =
+  selectedAgent.name === "codex"
+    ? [{ hostPath: "~/.codex/auth.json", sandboxPath: "~/.codex/auth.json" }]
+    : [];
 
 // The planner emits its plan as JSON inside <plan> tags; Output.object extracts
 // and validates it against this schema. We use Zod here, but any Standard
@@ -67,13 +87,13 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
   // -------------------------------------------------------------------------
   const plan = await sandcastle.run({
     hooks,
-    sandbox: docker(),
+    sandbox: docker({ mounts: codexAuthMounts }),
     name: "planner",
     // One iteration is enough: the planner just needs to read and reason,
     // not write code. (Structured output requires maxIterations: 1.)
     maxIterations: 1,
     // Opus for planning: dependency analysis benefits from deeper reasoning.
-    agent: sandcastle.agent({ default: "claude-code" }),
+    agent: selectedAgent,
     promptFile: "./.sandcastle/plan-prompt.md",
     // Extract and validate the <plan> JSON into a typed object. Throws
     // StructuredOutputError if the tag is missing, the JSON is malformed, or
@@ -111,13 +131,13 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
         hooks,
         copyToWorktree,
         // Each agent starts on its own branch via branchStrategy on run().
-        sandbox: docker(),
+        sandbox: docker({ mounts: codexAuthMounts }),
         branchStrategy: { type: "branch", branch: issue.branch },
         name: "implementer",
         // Give each agent plenty of room to implement and iterate on tests.
         maxIterations: 100,
         // Sonnet for execution: fast and capable enough for typical issue work.
-        agent: sandcastle.agent({ default: "claude-code" }),
+        agent: selectedAgent,
         promptFile: "./.sandcastle/implement-prompt.md",
         // Prompt arguments substitute {{TASK_ID}}, {{ISSUE_TITLE}},
         // and {{BRANCH}} placeholders in implement-prompt.md before the
@@ -184,11 +204,11 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
   // -------------------------------------------------------------------------
   await sandcastle.run({
     hooks,
-    sandbox: docker(),
+    sandbox: docker({ mounts: codexAuthMounts }),
     name: "merger",
     maxIterations: 1,
     // Sonnet is sufficient for merge conflict resolution.
-    agent: sandcastle.agent({ default: "claude-code" }),
+    agent: selectedAgent,
     promptFile: "./.sandcastle/merge-prompt.md",
     promptArgs: {
       // A markdown list of branch names, one per line.

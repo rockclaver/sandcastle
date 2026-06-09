@@ -21,9 +21,29 @@
 // Or add to package.json:
 //   "scripts": { "sandcastle": "npx tsx .sandcastle/main.mts" }
 
+import { existsSync } from "node:fs";
 import * as sandcastle from "@rockclaver/sandcastle";
 import { docker } from "@rockclaver/sandcastle/sandboxes/docker";
 import { z } from "zod";
+
+// Load .sandcastle/.env into the host process so agent() can read AGENT /
+// AGENT_MODEL when selecting the provider. The env resolver only injects
+// these into the sandbox container, so without this the host-side agent()
+// call ignores AGENT and falls back to its baked-in default.
+if (existsSync(".sandcastle/.env")) process.loadEnvFile(".sandcastle/.env");
+
+// Resolve the agent once so we can both run it and detect codex below.
+const selectedAgent = sandcastle.agent({ default: "claude-code" });
+
+// Codex authenticates with the host's ~/.codex/auth.json (ChatGPT/Codex
+// subscription login). Bind-mount it into the sandbox so codex is logged in
+// inside the container. Empty for other agents. Note: one subscription token
+// shared across concurrent sandboxes can be invalidated by codex token
+// rotation — prefer an API key for heavily parallel runs.
+const codexAuthMounts =
+  selectedAgent.name === "codex"
+    ? [{ hostPath: "~/.codex/auth.json", sandboxPath: "~/.codex/auth.json" }]
+    : [];
 
 // The planner emits its plan as JSON inside <plan> tags; Output.object extracts
 // and validates it against this schema. We use Zod here, but any Standard
@@ -72,13 +92,13 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
   // -------------------------------------------------------------------------
   const plan = await sandcastle.run({
     hooks,
-    sandbox: docker(),
+    sandbox: docker({ mounts: codexAuthMounts }),
     name: "planner",
     // One iteration is enough: the planner just needs to read and reason,
     // not write code. (Structured output requires maxIterations: 1.)
     maxIterations: 1,
     // Opus for planning: dependency analysis benefits from deeper reasoning.
-    agent: sandcastle.agent({ default: "claude-code" }),
+    agent: selectedAgent,
     promptFile: "./.sandcastle/plan-prompt.md",
     // Extract and validate the <plan> JSON into a typed object. Throws
     // StructuredOutputError if the tag is missing, the JSON is malformed, or
@@ -115,7 +135,7 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
     issues.map(async (issue) => {
       const sandbox = await sandcastle.createSandbox({
         branch: issue.branch,
-        sandbox: docker(),
+        sandbox: docker({ mounts: codexAuthMounts }),
         hooks,
         copyToWorktree,
       });
@@ -125,7 +145,7 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
         const implement = await sandbox.run({
           name: "implementer",
           maxIterations: 100,
-          agent: sandcastle.agent({ default: "claude-code" }),
+          agent: selectedAgent,
           promptFile: "./.sandcastle/implement-prompt.md",
           promptArgs: {
             TASK_ID: issue.id,
@@ -139,7 +159,7 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
           const review = await sandbox.run({
             name: "reviewer",
             maxIterations: 1,
-            agent: sandcastle.agent({ default: "claude-code" }),
+            agent: selectedAgent,
             promptFile: "./.sandcastle/review-prompt.md",
             promptArgs: {
               BRANCH: issue.branch,
@@ -207,10 +227,10 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
   // -------------------------------------------------------------------------
   await sandcastle.run({
     hooks,
-    sandbox: docker(),
+    sandbox: docker({ mounts: codexAuthMounts }),
     name: "merger",
     maxIterations: 1,
-    agent: sandcastle.agent({ default: "claude-code" }),
+    agent: selectedAgent,
     promptFile: "./.sandcastle/merge-prompt.md",
     promptArgs: {
       // A markdown list of branch names, one per line.

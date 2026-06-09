@@ -946,7 +946,9 @@ await run({
 });
 ```
 
-`sandcastle init` scaffolds this shape from the agent selection step. In the interactive flow, choose one or more agents with the multi-select prompt; non-interactive init can pass a comma-separated `--agent claude-code,codex` value. The first selected agent becomes the generated `agent({ default })` provider. Passing `--model` pre-fills `AGENT_MODEL` in `.env.example`, and users can later switch among the selected, installed providers by setting `AGENT` without editing the generated script.
+`sandcastle init` scaffolds this shape from the agent selection step. In the interactive flow, choose one or more agents with the multi-select prompt; non-interactive init can pass a comma-separated `--agent claude-code,codex` value. The first selected agent becomes the generated `agent({ default })` provider. Passing `--model` pre-fills `AGENT_MODEL` in `.env.example`, and users can later switch among the selected, installed providers by setting `AGENT` without editing the generated script. The generated `main.mts` loads `.sandcastle/.env` into the host process so that `AGENT` / `AGENT_MODEL` are honored when the provider is selected.
+
+When `codex` is the active agent, the generated `main.mts` bind-mounts the host's `~/.codex/auth.json` (your ChatGPT/Codex subscription login from `codex login`) into the sandbox so the codex CLI is authenticated inside the container — no API key required. A single subscription token shared across concurrent sandboxes can be invalidated by codex token rotation, so prefer an `OPENAI_API_KEY` for heavily parallel runs.
 
 ### `ClaudeCodeOptions`
 
