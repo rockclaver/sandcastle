@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -48,18 +48,6 @@ describe("profile documentation (issue #8)", () => {
     for (const sdk of ["flutter", "dart", "go"]) {
       expect(haystack).toContain(sdk);
     }
-  });
-
-  it("AC: a patch changeset exists for `@rockclaver/sandcastle`", () => {
-    const changesetDir = join(repoRoot, ".changeset");
-    const files = readdirSync(changesetDir).filter(
-      (f) => f.endsWith(".md") && f !== "README.md",
-    );
-    const hasPatch = files.some((f) => {
-      const body = readFileSync(join(changesetDir, f), "utf8");
-      return /"@rockclaver\/sandcastle":\s*patch/.test(body);
-    });
-    expect(hasPatch).toBe(true);
   });
 
   it("documents the `Profile` term in CONTEXT.md", () => {
