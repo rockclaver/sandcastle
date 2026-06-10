@@ -628,7 +628,7 @@ const PROFILE_REGISTRY: ProfileEntry[] = [
     name: "flutter",
     label: "Flutter",
     guidance:
-      "Flutter application using the Dart SDK. Fetch packages with `flutter pub get`, then analyze and test through the Flutter toolchain. Sandcastle does not install or pin the Flutter SDK — assume it is available in the sandbox.",
+      "Flutter application using the Dart SDK. Fetch packages with `flutter pub get`, then analyze and test through the Flutter toolchain. With the Docker sandbox, Sandcastle provisions a Linux Flutter SDK matching your host's version into `~/.cache/sandcastle/flutter` and bind-mounts it into the container, so `flutter` is on PATH.",
     setupCommands: ["flutter pub get"],
     validationCommands: ["flutter pub get", "flutter analyze", "flutter test"],
   },
@@ -636,7 +636,7 @@ const PROFILE_REGISTRY: ProfileEntry[] = [
     name: "dart",
     label: "Dart",
     guidance:
-      "Standalone Dart package (no Flutter). Fetch packages with `dart pub get`, then analyze and test with the Dart toolchain. Sandcastle does not install or pin the Dart SDK — assume it is available in the sandbox.",
+      "Standalone Dart package (no Flutter). Fetch packages with `dart pub get`, then analyze and test with the Dart toolchain. With the Docker sandbox, Sandcastle provisions a Linux Flutter SDK (which bundles Dart) into `~/.cache/sandcastle/flutter` and bind-mounts it into the container, so `dart` is on PATH.",
     setupCommands: ["dart pub get"],
     validationCommands: ["dart pub get", "dart analyze", "dart test"],
   },
@@ -1067,11 +1067,15 @@ const buildProfileSetupHookCommand = (
  * - When no JS/TS profile is selected, the npm-only `main` setup hook is
  *   rewritten to a guarded command that runs the primary profile's setup only
  *   when its toolchain is present (the scaffolded image ships no SDK).
+ * - For Flutter/Dart on the Docker provider, the `docker(...)` sandbox is
+ *   swapped for `flutterSandbox(...)`, which provisions and mounts a host-cached
+ *   Linux Flutter SDK so the toolchain is actually present in the container.
  */
 const rewriteProfileReferences = (
   configDir: string,
   profiles: readonly ProfileEntry[],
   mainFilename: string,
+  sandboxProviderName: string,
 ): Effect.Effect<void, Error, FileSystem.FileSystem> =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -1118,9 +1122,14 @@ const rewriteProfileReferences = (
         const mainContent = yield* fs
           .readFileString(mainPath)
           .pipe(Effect.mapError((e) => new Error(e.message)));
-        const rewritten = mainContent.replace(
+        let rewritten = mainContent.replace(
           /command: "npm install"/g,
           `command: ${JSON.stringify(buildProfileSetupHookCommand(primary, setupCommand))}`,
+        );
+        rewritten = injectFlutterSandbox(
+          rewritten,
+          primary.name,
+          sandboxProviderName,
         );
         if (rewritten !== mainContent) {
           yield* fs
@@ -1130,6 +1139,31 @@ const rewriteProfileReferences = (
       }
     }
   });
+
+/**
+ * For Flutter/Dart projects on the Docker provider, swap the scaffolded
+ * `docker(...)` sandbox for `flutterSandbox(...)`, which provisions and mounts a
+ * host-cached Linux Flutter SDK. A no-op for other profiles or providers (the
+ * `flutterSandbox` wrapper only wraps `docker`). Uses literal find/replace
+ * because every template shares the same docker import line and `docker({
+ * mounts: codexAuthMounts })` call shape.
+ */
+const injectFlutterSandbox = (
+  mainContent: string,
+  primaryProfileName: string,
+  sandboxProviderName: string,
+): string => {
+  const isFlutterProfile =
+    primaryProfileName === "flutter" || primaryProfileName === "dart";
+  if (!isFlutterProfile || sandboxProviderName !== "docker") return mainContent;
+  return mainContent
+    .split('import { docker } from "@rockclaver/sandcastle/sandboxes/docker";')
+    .join(
+      'import { docker, flutterSandbox } from "@rockclaver/sandcastle/sandboxes/docker";',
+    )
+    .split("docker({ mounts: codexAuthMounts })")
+    .join("flutterSandbox({ mounts: codexAuthMounts })");
+};
 
 /** Text file extensions eligible for `{{KEY}}` template argument substitution. */
 const TEXT_FILE_EXTENSIONS = new Set([
@@ -1492,7 +1526,12 @@ export const scaffold = (
     yield* scaffoldProfiles(configDir, selectedProfiles);
 
     // Point prompts + main setup at the selected profile guidance.
-    yield* rewriteProfileReferences(configDir, selectedProfiles, mainFilename);
+    yield* rewriteProfileReferences(
+      configDir,
+      selectedProfiles,
+      mainFilename,
+      sandboxProvider.name,
+    );
 
     return { mainFilename };
   });

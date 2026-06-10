@@ -691,7 +691,7 @@ try {
 
 ### Profiles
 
-A **profile** describes the language/stack of the repo Sandcastle is operating on, so the scaffolded prompts and `main` setup point your agent at the right toolchain instead of assuming npm. Profiles are an internal registry shipped with Sandcastle — in v1 they are not user-defined config, and selecting one does **not** install, pin, or manage any SDK. The built-in profiles are `js-ts`, `flutter`, `dart`, and `go`.
+A **profile** describes the language/stack of the repo Sandcastle is operating on, so the scaffolded prompts and `main` setup point your agent at the right toolchain instead of assuming npm. Profiles are an internal registry shipped with Sandcastle — in v1 they are not user-defined config. For most profiles, selecting one does **not** install, pin, or manage any SDK; the exception is `flutter`/`dart` on the Docker provider, which auto-provisions a host-cached Linux Flutter SDK (see below). The built-in profiles are `js-ts`, `flutter`, `dart`, and `go`.
 
 Select one or more profiles during `sandcastle init`. The interactive prompt is a multi-select with `js-ts` selected by default; non-interactively, pass a comma-separated `--profile` flag:
 
@@ -720,7 +720,9 @@ Each `<profile>.md` describes the stack and lists suggested **setup** and **vali
 
 **How agents use them.** Every scaffolded prompt gains a "Project profiles" section that links the generated guidance files and instructs the agent to read each one and follow its setup and validation commands rather than assuming a fixed toolchain. When no JS/TS profile is selected, the generated `main` setup hook runs the primary profile's setup command (e.g. `flutter pub get`, `go mod download`) instead of `npm install`. The commands in the guidance files are advisory, not a contract — the agent should adapt them to the project's actual scripts.
 
-**Out of scope.** Profiles are guidance only. Sandcastle does **not** install Flutter, Dart, or Go; does **not** pin or manage SDK versions; and assumes the relevant toolchain is already available in the sandbox image. Pin or install SDKs yourself by editing the scaffolded `Dockerfile`/`Containerfile`.
+**Flutter/Dart SDK provisioning (Docker provider).** Bind-mounting your host Flutter SDK into the Linux container doesn't work — the host's Dart binary is built for your host OS (e.g. macOS Mach-O) and can't execute under Linux. Instead, when you scaffold a `flutter` or `dart` project with the Docker provider, the generated `main` swaps `docker(...)` for `flutterSandbox(...)`. On each run this provisions a **Linux** Flutter SDK matching your host's Flutter version (falling back to a baked default when the host has none) into `~/.cache/sandcastle/flutter`, then bind-mounts that cache into the container and puts it on `PATH`. The download runs on the host — where the network works — instead of inside the Docker build, so `flutter pub get` / `flutter analyze` / `flutter test` run reliably in the sandbox. The cache is reused across runs (gated by a version stamp), so the SDK downloads only once. Override the version/channel via `flutterSandbox({ flutter: { version, channel } })` in `main`.
+
+**Out of scope.** Aside from the Flutter/Dart provisioning above, profiles are guidance only. Sandcastle does **not** install Go; does **not** pin or manage other SDK versions; and assumes the relevant toolchain is already available in the sandbox image. Pin or install other SDKs yourself by editing the scaffolded `Dockerfile`/`Containerfile`.
 
 ### Templates
 

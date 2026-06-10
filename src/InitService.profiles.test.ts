@@ -244,6 +244,41 @@ describe("Profile-aware template output", () => {
     );
   });
 
+  it("AC: flutter scaffold swaps docker() for flutterSandbox() on the Docker provider", async () => {
+    const dir = await makeDir();
+    await runScaffold(dir, {
+      templateName: "simple-loop",
+      profiles: profilesFor("flutter"),
+    });
+
+    const main = await readFile(join(dir, ".sandcastle", "main.mts"), "utf-8");
+    expect(main).toContain(
+      'import { docker, flutterSandbox } from "@rockclaver/sandcastle/sandboxes/docker";',
+    );
+    expect(main).toContain("flutterSandbox({ mounts: codexAuthMounts })");
+    expect(main).not.toContain("docker({ mounts: codexAuthMounts })");
+  });
+
+  it("AC: dart scaffold also swaps docker() for flutterSandbox()", async () => {
+    const dir = await makeDir();
+    await runScaffold(dir, {
+      templateName: "simple-loop",
+      profiles: profilesFor("dart"),
+    });
+
+    const main = await readFile(join(dir, ".sandcastle", "main.mts"), "utf-8");
+    expect(main).toContain("flutterSandbox({ mounts: codexAuthMounts })");
+  });
+
+  it("AC: js-ts scaffold keeps the plain docker() sandbox", async () => {
+    const dir = await makeDir();
+    await runScaffold(dir, { templateName: "simple-loop" });
+
+    const main = await readFile(join(dir, ".sandcastle", "main.mts"), "utf-8");
+    expect(main).toContain("docker({ mounts: codexAuthMounts })");
+    expect(main).not.toContain("flutterSandbox");
+  });
+
   // AC (issue #11): Selecting `flutter` scaffolds Flutter-aware guidance and
   // does not scaffold unrelated Go-only guidance.
   it("AC: selecting flutter scaffolds flutter guidance and not go guidance", async () => {

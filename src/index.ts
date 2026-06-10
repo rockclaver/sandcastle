@@ -43,6 +43,21 @@ export {
 export type { HostSessionLookup } from "./SessionStore.js";
 export type { SandboxHooks } from "./SandboxLifecycle.js";
 export type { MountConfig } from "./MountConfig.js";
+export {
+  FLUTTER_SANDBOX_DIR,
+  flutterCacheDir,
+  detectHostFlutterVersion,
+  parseFlutterVersion,
+  flutterTarballUrl,
+  ensureLinuxFlutter,
+  flutterSandboxMounts,
+  flutterSandboxEnv,
+} from "./flutterSdk.js";
+export type {
+  FlutterVersion,
+  EnsureFlutterOptions,
+  EnsuredFlutter,
+} from "./flutterSdk.js";
 export { Output, StructuredOutputError } from "./Output.js";
 export type {
   OutputDefinition,

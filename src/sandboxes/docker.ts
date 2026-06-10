@@ -33,6 +33,12 @@ import {
 } from "../mountUtils.js";
 import { BoundedTail, MAX_TAIL_CHARS } from "../boundedTail.js";
 import { registerShutdown } from "../shutdownRegistry.js";
+import {
+  ensureLinuxFlutter,
+  flutterSandboxEnv,
+  flutterSandboxMounts,
+  type EnsureFlutterOptions,
+} from "../flutterSdk.js";
 
 export interface DockerOptions {
   /** Docker image name (default: derived from repo directory name). */
@@ -389,6 +395,34 @@ export const docker = (options?: DockerOptions): SandboxProvider => {
 
       return handle;
     },
+  });
+};
+
+export interface FlutterSandboxOptions extends DockerOptions {
+  /**
+   * Flutter version/channel overrides. Defaults to matching the host Flutter
+   * (or a baked default when the host has none).
+   */
+  readonly flutter?: EnsureFlutterOptions;
+}
+
+/**
+ * Docker sandbox provider preconfigured for Flutter/Dart projects.
+ *
+ * Provisions a Linux Flutter SDK into a host cache (downloading it once), then
+ * bind-mounts it into the container and puts it on PATH so `flutter analyze` /
+ * `flutter test` run inside the sandbox. The host download avoids the in-Docker
+ * download that fails in restricted build environments.
+ */
+export const flutterSandbox = (
+  options: FlutterSandboxOptions = {},
+): SandboxProvider => {
+  const { flutter, mounts, env, ...rest } = options;
+  const { cacheDir } = ensureLinuxFlutter(flutter);
+  return docker({
+    ...rest,
+    mounts: [...(mounts ?? []), ...flutterSandboxMounts(cacheDir)],
+    env: { ...flutterSandboxEnv(), ...env },
   });
 };
 
